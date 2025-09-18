@@ -8,6 +8,8 @@ from telegram.ext import (
 )
 import tempfile
 import openpyxl
+from flask import Flask
+import threading
 
 # Настройка логирования
 logging.basicConfig(
@@ -22,15 +24,14 @@ logger = logging.getLogger(__name__)
 
 class QuizBot:
     def __init__(self, admin_ids):
-        self.db_path = 'quiz_bot.db'
-        self.admin_ids = admin_ids  # Список ID администраторов
+        self.db_path = '/tmp/quiz_bot.db'  # Use /tmp for Render ephemeral storage
+        self.admin_ids = admin_ids  # List of admin IDs
         self.init_database()
         self.user_states = {}
 
     def init_database(self):
         """Инициализация базы данных SQLite"""
         conn = sqlite3.connect(self.db_path)
-        # Включаем поддержку внешних ключей
         conn.execute("PRAGMA foreign_keys = ON")
         c = conn.cursor()
         
@@ -57,7 +58,6 @@ class QuizBot:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
-        # Создаем таблицу пользователей если её нет
         c.execute('''CREATE TABLE IF NOT EXISTS users
                      (id INTEGER PRIMARY KEY,
                       first_name TEXT,
@@ -451,17 +451,17 @@ def main():
     # Настройка администраторов (замените на реальные ID)
     ADMIN_IDS = [123456789, 987654321]  # Пример: ваш Telegram ID
     
-    # Загрузка токена из переменной окружения (рекомендуется)
-    TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    # Загрузка токена из переменной окружения
+    TOKEN = os.getenv("BOT_TOKEN")
     if not TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN не установлен!")
+        raise RuntimeError("BOT_TOKEN не установлен!")
     
     PORT = int(os.environ.get('PORT', 10000))
     
     quiz_bot = QuizBot(admin_ids=ADMIN_IDS)
     
     # Создаем Application с сохранением состояний
-    persistence = PicklePersistence(filepath="quiz_conversation_states.pkl")
+    persistence = PicklePersistence(filepath="/tmp/quiz_conversation_states.pkl")
     application = Application.builder().token(TOKEN).persistence(persistence).build()
     
     # Создаем ConversationHandler для основного режима
@@ -530,11 +530,15 @@ def main():
     
     # Запускаем бота
     logger.info("Бот запущен...")
+    webhook_url = f'https://{os.environ.get("RENDER_EXTERNAL_URL")}/{TOKEN}'
+    logger.info(f"Webhook URL: {webhook_url}")
     application.run_webhook(
         listen='0.0.0.0',
         port=PORT,
         url_path=TOKEN,
-        webhook_url=f'https://{os.environ.get("RENDER_EXTERNAL_URL")}/{TOKEN}'
+        webhook_url=webhook_url,
+        bootstrap_retries=-1,
+        drop_pending_updates=True
     )
 
 if __name__ == '__main__':
