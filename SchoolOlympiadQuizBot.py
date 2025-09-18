@@ -456,6 +456,8 @@ def main():
     if not TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не установлен!")
     
+    PORT = int(os.environ.get('PORT', 10000))
+    
     quiz_bot = QuizBot(admin_ids=ADMIN_IDS)
     
     # Создаем Application с сохранением состояний
@@ -528,7 +530,12 @@ def main():
     
     # Запускаем бота
     logger.info("Бот запущен...")
-    application.run_polling()
+    application.run_webhook(
+        listen='0.0.0.0',
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f'https://{os.environ.get("RENDER_EXTERNAL_URL")}/{TOKEN}'
+    )
 
 if __name__ == '__main__':
     main()
