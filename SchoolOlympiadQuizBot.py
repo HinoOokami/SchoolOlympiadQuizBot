@@ -11,7 +11,6 @@ import tempfile
 import openpyxl
 from flask import Flask
 import threading
-import asyncio
 
 # Настройка логирования
 logging.basicConfig(
@@ -513,17 +512,6 @@ def main():
     
     webhook_url = f'https://{clean_url}/{TOKEN}'
     logger.info(f"Setting webhook URL: {webhook_url}")
-    
-    # Проверка webhook
-    async def check_webhook():
-        async with application:
-            await application.bot.delete_webhook()
-            await application.bot.set_webhook(url=webhook_url)
-            webhook_info = await application.bot.get_webhook_info()
-            logger.info(f"Webhook info: {webhook_info}")
-    
-    # Запуск проверки webhook
-    asyncio.run(check_webhook())
     
     application.run_webhook(
         listen='0.0.0.0',
