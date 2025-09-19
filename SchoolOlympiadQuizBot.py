@@ -1,6 +1,7 @@
 import os
 import logging
 import sqlite3
+from urllib.parse import urlparse
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, 
@@ -24,23 +25,20 @@ logger = logging.getLogger(__name__)
 
 class QuizBot:
     def __init__(self, admin_ids):
-        self.db_path = '/tmp/quiz_bot.db'  # Use /tmp for Render ephemeral storage
-        self.admin_ids = admin_ids  # List of admin IDs
+        self.db_path = '/tmp/quiz_bot.db'
+        self.admin_ids = admin_ids
         self.init_database()
         self.user_states = {}
 
     def init_database(self):
-        """Инициализация базы данных SQLite"""
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA foreign_keys = ON")
         c = conn.cursor()
         
-        # Таблица для тем
         c.execute('''CREATE TABLE IF NOT EXISTS topics
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
                       name TEXT UNIQUE)''')
         
-        # Таблица для вопросов
         c.execute('''CREATE TABLE IF NOT EXISTS questions
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
                       topic_id INTEGER,
@@ -54,7 +52,6 @@ class QuizBot:
         conn.close()
 
     def save_user_to_db(self, user):
-        """Сохранение пользователя в базу данных"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
@@ -71,20 +68,14 @@ class QuizBot:
         conn.close()
 
     def parse_excel_file(self, file_path, replace=True):
-        """
-        Парсинг Excel файла с использованием openpyxl
-        replace: True - заменить все данные, False - добавить новые
-        """
         try:
             workbook = openpyxl.load_workbook(file_path)
             sheet = workbook.active
             
-            # Читаем заголовки
             headers = []
             for cell in sheet[1]:
                 headers.append(cell.value)
             
-            # Проверяем необходимые колонки
             required_headers = ['Тема', 'Вопрос', 'Подсказка', 'Ответ']
             for req in required_headers:
                 if req not in headers:
@@ -93,54 +84,44 @@ class QuizBot:
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
             
-            # Очищаем данные только если требуется замена
             if replace:
                 c.execute("DELETE FROM questions")
                 c.execute("DELETE FROM topics")
             
-            # Читаем данные построчно
             for row_num in range(2, sheet.max_row + 1):
                 row_data = []
                 for col_num in range(1, len(headers) + 1):
                     cell_value = sheet.cell(row=row_num, column=col_num).value
                     row_data.append(cell_value)
                 
-                # Пропускаем пустые строки
                 if not any(row_data):
                     continue
                 
-                # Проверка количества колонок
                 if len(row_data) < len(required_headers):
                     logger.warning(f"Пропущена строка {row_num}: недостаточно колонок")
                     continue
                 
-                # Извлекаем данные по заголовкам
                 topic_name = row_data[headers.index('Тема')]
                 question_text = row_data[headers.index('Вопрос')]
                 hint = row_data[headers.index('Подсказка')]
                 answer = row_data[headers.index('Ответ')]
                 
-                # Проверка обязательных полей
                 if not all([topic_name, question_text, answer]):
                     logger.warning(f"Пропущена строка {row_num}: отсутствуют обязательные поля")
                     continue
                 
-                # Обрабатываем сложность (если есть)
                 difficulty = 'medium'
                 if 'Сложность' in headers:
                     difficulty = row_data[headers.index('Сложность')] or 'medium'
                 
-                # Пропускаем пустые темы
                 if not str(topic_name).strip():
                     logger.warning(f"Пропущена строка {row_num}: пустая тема")
                     continue
                 
-                # Сохраняем тему (игнорируем дубликаты при добавлении)
                 c.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic_name,))
                 c.execute("SELECT id FROM topics WHERE name = ?", (topic_name,))
                 topic_id = c.fetchone()[0]
                 
-                # Сохраняем вопрос (дубликаты возможны, но это допустимо)
                 c.execute('''INSERT INTO questions (topic_id, question_text, hint, answer, difficulty)
                              VALUES (?, ?, ?, ?, ?)''',
                          (topic_id, question_text, hint, answer, difficulty))
@@ -154,7 +135,6 @@ class QuizBot:
             return False
 
     def clear_database(self):
-        """Очистка базы данных"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         c.execute("DELETE FROM questions")
@@ -163,7 +143,6 @@ class QuizBot:
         conn.close()
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start"""
         user = update.effective_user
         self.save_user_to_db(user)
         
@@ -176,7 +155,6 @@ class QuizBot:
         return UPLOAD
 
     async def upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, replace=True):
-        """Обработчик загрузки файла (общий для основного и админского режима)"""
         if update.message.document:
             file = await update.message.document.get_file()
             file_extension = os.path.splitext(update.message.document.file_name)[1].lower()
@@ -221,7 +199,6 @@ class QuizBot:
             return UPLOAD if replace else ADMIN_UPLOAD
 
     def get_topics_from_db(self):
-        """Получение списка тем из базы данных"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
@@ -232,7 +209,6 @@ class QuizBot:
         return topics
 
     def get_questions_for_topic(self, topic_name):
-        """Получение вопросов для выбранной темы из базы данных (без учета регистра)"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
@@ -256,11 +232,9 @@ class QuizBot:
         return questions
 
     async def choose_topic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик выбора темы"""
         topic_name = update.message.text
         user_id = update.effective_user.id
         
-        # Сохраняем выбранную тему для пользователя
         if user_id not in self.user_states:
             self.user_states[user_id] = {}
         
@@ -270,7 +244,6 @@ class QuizBot:
         self.user_states[user_id]['current_question_index'] = 0
         
         if questions:
-            # Показываем первый вопрос
             question = questions[0]
             await update.message.reply_text(
                 f"📚 Тема: {topic_name}\n"
@@ -288,7 +261,6 @@ class QuizBot:
             return CHOOSE_TOPIC
 
     async def show_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показать текущий вопрос"""
         user_id = update.effective_user.id
         if user_id in self.user_states:
             questions = self.user_states[user_id]['questions']
@@ -317,7 +289,6 @@ class QuizBot:
             return CHOOSE_TOPIC
 
     async def show_hint(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показать подсказку"""
         user_id = update.effective_user.id
         if user_id in self.user_states:
             questions = self.user_states[user_id]['questions']
@@ -339,7 +310,6 @@ class QuizBot:
         return QUESTION
 
     async def show_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показать ответ"""
         user_id = update.effective_user.id
         if user_id in self.user_states:
             questions = self.user_states[user_id]['questions']
@@ -359,7 +329,6 @@ class QuizBot:
         return QUESTION
 
     async def next_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Следующий вопрос"""
         user_id = update.effective_user.id
         if user_id in self.user_states:
             self.user_states[user_id]['current_question_index'] += 1
@@ -367,14 +336,11 @@ class QuizBot:
         return CHOOSE_TOPIC
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Отмена операции"""
         self.user_states.pop(update.effective_user.id, None)
         await update.message.reply_text("Операция отменена.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
-    # === Админские функции ===
     async def admin_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /admin"""
         user_id = update.effective_user.id
         if user_id not in self.admin_ids:
             await update.message.reply_text("❌ Доступ запрещен. Вы не администратор.")
@@ -393,7 +359,6 @@ class QuizBot:
         return ADMIN_MENU
 
     async def admin_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик меню администратора"""
         choice = update.message.text
         user_id = update.effective_user.id
         
@@ -429,14 +394,12 @@ class QuizBot:
         return ADMIN_MENU
 
     async def admin_upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик загрузки файла в админском режиме (добавление данных)"""
         if update.message.text == "↩️ Отмена":
             return await self.admin_menu(update, context)
         
         return await self.upload_file(update, context, replace=False)
 
     async def admin_confirm_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Подтверждение очистки базы"""
         if update.message.text == "✅ Да, очистить":
             self.clear_database()
             await update.message.reply_text(
@@ -445,26 +408,44 @@ class QuizBot:
             )
         return ADMIN_MENU
 
+# Flask health check
+app = Flask(__name__)
+
+@app.route('/health')
+def health():
+    return 'OK', 200
+
+def run_flask():
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"Starting Flask on port {port}")
+    app.run(host='0.0.0.0', port=port)
 
 def main():
-    """Основная функция"""
-    # Настройка администраторов (замените на реальные ID)
-    ADMIN_IDS = [123456789, 987654321]  # Пример: ваш Telegram ID
+    ADMIN_IDS = [123456789, 987654321]  # Замените на реальные ID
     
-    # Загрузка токена из переменной окружения
     TOKEN = os.getenv("BOT_TOKEN")
     if not TOKEN:
-        raise RuntimeError("BOT_TOKEN не установлен!")
+        logger.error("BOT_TOKEN не установлен")
+        raise ValueError("BOT_TOKEN не установлен!")
+    
+    RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
+    if not RENDER_URL:
+        logger.error("RENDER_EXTERNAL_URL не установлен")
+        raise ValueError("RENDER_EXTERNAL_URL не установлен!")
+    
+    # Очистка RENDER_EXTERNAL_URL от протокола
+    parsed_url = urlparse(RENDER_URL)
+    clean_url = parsed_url.netloc or parsed_url.path
+    clean_url = clean_url.strip('/')
     
     PORT = int(os.environ.get('PORT', 10000))
+    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., RENDER_EXTERNAL_URL={RENDER_URL}, Clean URL={clean_url}, PORT={PORT}")
     
     quiz_bot = QuizBot(admin_ids=ADMIN_IDS)
     
-    # Создаем Application с сохранением состояний
     persistence = PicklePersistence(filepath="/tmp/quiz_conversation_states.pkl")
     application = Application.builder().token(TOKEN).persistence(persistence).build()
     
-    # Создаем ConversationHandler для основного режима
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', quiz_bot.start)],
         states={
@@ -504,7 +485,6 @@ def main():
         persistent=True
     )
     
-    # Создаем ConversationHandler для админского режима
     admin_handler = ConversationHandler(
         entry_points=[CommandHandler('admin', quiz_bot.admin_start)],
         states={
@@ -524,14 +504,13 @@ def main():
         persistent=True
     )
     
-    # Добавляем обработчики
     application.add_handler(conv_handler)
     application.add_handler(admin_handler)
     
-    # Запускаем бота
-    logger.info("Бот запущен...")
-    webhook_url = f'https://{os.environ.get("RENDER_EXTERNAL_URL")}/{TOKEN}'
-    logger.info(f"Webhook URL: {webhook_url}")
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    webhook_url = f'https://{clean_url}/{TOKEN}'
+    logger.info(f"Setting webhook URL: {webhook_url}")
     application.run_webhook(
         listen='0.0.0.0',
         port=PORT,
