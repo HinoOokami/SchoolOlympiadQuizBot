@@ -9,8 +9,10 @@ from telegram.ext import (
 )
 import tempfile
 import openpyxl
-from flask import Flask
+from flask import Flask, request, Response
 import threading
+import asyncio
+import json
 
 # Настройка логирования
 logging.basicConfig(
@@ -408,22 +410,39 @@ class QuizBot:
             )
         return ADMIN_MENU
 
-# Flask health check
+# Flask приложение
 app = Flask(__name__)
+application = None  # Глобальная переменная для Application
 
 @app.route('/health')
 def health():
     logger.info("Health check endpoint called")
     return 'OK', 200
 
+@app.route('/<path:token>', methods=['POST'])
+async def webhook(token):
+    global application
+    if token != os.getenv("BOT_TOKEN"):
+        logger.warning("Invalid token received")
+        return Response("Invalid token", status=403)
+    
+    try:
+        data = request.get_json()
+        logger.info(f"Received webhook data: {data}")
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        return Response("OK", status=200)
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return Response("Error", status=500)
+
 def run_flask():
     port = int(os.environ.get('FLASK_PORT', 8080))
     logger.info(f"Starting Flask on port {port}")
     app.run(host='0.0.0.0', port=port)
 
-def main():
-    ADMIN_IDS = [123456789, 987654321]  # Замените на реальные ID
-    
+async def init_application():
+    global application
     TOKEN = os.getenv("BOT_TOKEN")
     if not TOKEN:
         logger.error("BOT_TOKEN не установлен")
@@ -442,7 +461,7 @@ def main():
     FLASK_PORT = int(os.environ.get('FLASK_PORT', 8080))
     logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., RENDER_EXTERNAL_URL={RENDER_URL}, Clean URL={clean_url}, PORT={PORT}, FLASK_PORT={FLASK_PORT}")
     
-    quiz_bot = QuizBot(admin_ids=ADMIN_IDS)
+    quiz_bot = QuizBot(admin_ids=[123456789, 987654321])  # Замените на реальные ID
     
     persistence = PicklePersistence(filepath="/tmp/quiz_conversation_states.pkl")
     application = Application.builder().token(TOKEN).persistence(persistence).build()
@@ -508,19 +527,28 @@ def main():
     application.add_handler(conv_handler)
     application.add_handler(admin_handler)
     
-    threading.Thread(target=run_flask, daemon=True).start()
-    
     webhook_url = f'https://{clean_url}/{TOKEN}'
     logger.info(f"Setting webhook URL: {webhook_url}")
     
-    application.run_webhook(
-        listen='0.0.0.0',
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=webhook_url,
-        bootstrap_retries=-1,
-        drop_pending_updates=True
-    )
+    await application.bot.delete_webhook()
+    await application.bot.set_webhook(url=webhook_url)
+    webhook_info = await application.bot.get_webhook_info()
+    logger.info(f"Webhook info: {webhook_info}")
+    
+    await application.initialize()
+    await application.start()
+
+def main():
+    # Запускаем Flask в отдельном потоке
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    # Запускаем инициализацию приложения
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_application())
+    
+    # Запускаем Flask в главном потоке (чтобы Render видел порт 8080)
+    run_flask()
 
 if __name__ == '__main__':
     main()
