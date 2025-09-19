@@ -11,6 +11,7 @@ import tempfile
 import openpyxl
 from flask import Flask
 import threading
+import asyncio
 
 # Настройка логирования
 logging.basicConfig(
@@ -413,10 +414,11 @@ app = Flask(__name__)
 
 @app.route('/health')
 def health():
+    logger.info("Health check endpoint called")
     return 'OK', 200
 
 def run_flask():
-    port = int(os.environ.get('PORT', 10000))
+    port = int(os.environ.get('FLASK_PORT', 8080))
     logger.info(f"Starting Flask on port {port}")
     app.run(host='0.0.0.0', port=port)
 
@@ -433,13 +435,13 @@ def main():
         logger.error("RENDER_EXTERNAL_URL не установлен")
         raise ValueError("RENDER_EXTERNAL_URL не установлен!")
     
-    # Очистка RENDER_EXTERNAL_URL от протокола
     parsed_url = urlparse(RENDER_URL)
     clean_url = parsed_url.netloc or parsed_url.path
     clean_url = clean_url.strip('/')
     
     PORT = int(os.environ.get('PORT', 10000))
-    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., RENDER_EXTERNAL_URL={RENDER_URL}, Clean URL={clean_url}, PORT={PORT}")
+    FLASK_PORT = int(os.environ.get('FLASK_PORT', 8080))
+    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., RENDER_EXTERNAL_URL={RENDER_URL}, Clean URL={clean_url}, PORT={PORT}, FLASK_PORT={FLASK_PORT}")
     
     quiz_bot = QuizBot(admin_ids=ADMIN_IDS)
     
@@ -511,6 +513,18 @@ def main():
     
     webhook_url = f'https://{clean_url}/{TOKEN}'
     logger.info(f"Setting webhook URL: {webhook_url}")
+    
+    # Проверка webhook
+    async def check_webhook():
+        async with application:
+            await application.bot.delete_webhook()
+            await application.bot.set_webhook(url=webhook_url)
+            webhook_info = await application.bot.get_webhook_info()
+            logger.info(f"Webhook info: {webhook_info}")
+    
+    # Запуск проверки webhook
+    asyncio.run(check_webhook())
+    
     application.run_webhook(
         listen='0.0.0.0',
         port=PORT,
