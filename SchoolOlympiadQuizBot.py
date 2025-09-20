@@ -10,7 +10,6 @@ from telegram.ext import (
 import tempfile
 import openpyxl
 from flask import Flask, request, Response
-import threading
 import asyncio
 import json
 
@@ -437,7 +436,7 @@ async def webhook(token):
         return Response("Error", status=500)
 
 def run_flask():
-    port = int(os.environ.get('FLASK_PORT', 8080))
+    port = int(os.environ.get('PORT', 10000))  # Используем $PORT для Render
     logger.info(f"Starting Flask on port {port}")
     app.run(host='0.0.0.0', port=port)
 
@@ -453,13 +452,11 @@ async def init_application():
         logger.error("RENDER_EXTERNAL_URL не установлен")
         raise ValueError("RENDER_EXTERNAL_URL не установлен!")
     
+    # Очистка URL
     parsed_url = urlparse(RENDER_URL)
-    clean_url = parsed_url.netloc or parsed_url.path
-    clean_url = clean_url.strip('/')
-    
-    PORT = int(os.environ.get('PORT', 10000))
-    FLASK_PORT = int(os.environ.get('FLASK_PORT', 8080))
-    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., RENDER_EXTERNAL_URL={RENDER_URL}, Clean URL={clean_url}, PORT={PORT}, FLASK_PORT={FLASK_PORT}")
+    clean_url = parsed_url.netloc.strip('/')  # Только домен без пути и схемы
+
+    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., RENDER_EXTERNAL_URL={RENDER_URL}, Clean URL={clean_url}, PORT={os.environ.get('PORT', 10000)}")
     
     quiz_bot = QuizBot(admin_ids=[123456789, 987654321])  # Замените на реальные ID
     
@@ -535,19 +532,20 @@ async def init_application():
     webhook_info = await application.bot.get_webhook_info()
     logger.info(f"Webhook info: {webhook_info}")
     
+    if webhook_info.url != webhook_url:
+        logger.error(f"Webhook setup failed: expected {webhook_url}, got {webhook_info.url}")
+        raise RuntimeError("Webhook setup failed")
+    
     await application.initialize()
     await application.start()
 
 def main():
-    # Запускаем Flask в отдельном потоке
-    threading.Thread(target=run_flask, daemon=True).start()
-    
     # Запускаем инициализацию приложения
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(init_application())
     
-    # Запускаем Flask в главном потоке (чтобы Render видел порт 8080)
+    # Запускаем Flask в главном потоке
     run_flask()
 
 if __name__ == '__main__':
