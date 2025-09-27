@@ -418,8 +418,8 @@ def health():
     logger.info("Health check endpoint called")
     return 'OK', 200
 
-@app.route('/<path:token>', methods=['POST'])
-async def webhook(token):
+@app.route('/<token>', methods=['POST'])
+def webhook(token):
     global application
     if token != os.getenv("BOT_TOKEN"):
         logger.warning("Invalid token received")
@@ -427,13 +427,18 @@ async def webhook(token):
     
     try:
         data = request.get_json()
-        logger.info(f"Received webhook data: {data}")
+        logger.info(f"Received webhook data: {json.dumps(data, ensure_ascii=False)}")
         update = Update.de_json(data, application.bot)
-        await application.process_update(update)
-        return Response("OK", status=200)
+        if update:
+            asyncio.run(application.process_update(update))
+            logger.info("Webhook update processed successfully")
+            return Response("OK", status=200)
+        else:
+            logger.error("Failed to parse update from webhook data")
+            return Response("Invalid update data", status=400)
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
-        return Response("Error", status=500)
+        logger.error(f"Error processing webhook: {str(e)}")
+        return Response(f"Error: {str(e)}", status=500)
 
 def run_flask():
     port = int(os.environ.get('PORT', 10000))  # Используем $PORT для Render
