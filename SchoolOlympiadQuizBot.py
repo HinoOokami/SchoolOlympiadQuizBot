@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class QuizBot:
     def __init__(self, admin_ids):
-        self.db_path = '/quiz_bot.db'
+        self.db_path = '/app/quiz_bot.db'
         self.admin_ids = admin_ids
         self.init_database()
         self.user_states = {}
