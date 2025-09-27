@@ -21,8 +21,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Состояния для ConversationHandler
-(UPLOAD, CHOOSE_TOPIC, QUESTION, HINT, ANSWER, 
- ADMIN_MENU, ADMIN_UPLOAD, ADMIN_CONFIRM_CLEAR) = range(8)
+(CHOOSE_TOPIC, QUESTION, HINT, ANSWER, 
+ ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(8)
 
 class QuizBot:
     def __init__(self, admin_ids):
@@ -147,13 +147,22 @@ class QuizBot:
         user = update.effective_user
         self.save_user_to_db(user)
         
+        topics = self.get_topics_from_db()
+        if not topics:
+            await update.message.reply_text(
+                f"Привет, {user.first_name}! Я бот для викторин.\n\n"
+                "На данный момент нет доступных тем. Обратитесь к администратору."
+            )
+            return ConversationHandler.END
+        
+        keyboard = [[topic] for topic in topics]
+        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
         await update.message.reply_text(
             f"Привет, {user.first_name}! Я бот для викторин.\n\n"
-            "Отправьте мне XLS/XLSX файл с вопросами.\n\n"
-            "Формат файла должен содержать колонки:\n"
-            "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)"
+            "Выберите тему для вопросов:",
+            reply_markup=reply_markup
         )
-        return UPLOAD
+        return CHOOSE_TOPIC
 
     async def upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, replace=True):
         if update.message.document:
@@ -162,7 +171,7 @@ class QuizBot:
             
             if file_extension not in ['.xls', '.xlsx']:
                 await update.message.reply_text("Пожалуйста, отправьте файл в формате XLS или XLSX.")
-                return UPLOAD if replace else ADMIN_UPLOAD
+                return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
                 await file.download_to_drive(tmp_file.name)
@@ -171,33 +180,17 @@ class QuizBot:
                 os.unlink(tmp_file.name)
                 
                 if success:
-                    topics = self.get_topics_from_db()
-                    if not topics:
-                        await update.message.reply_text(
-                            "Файл загружен, но темы не найдены. Проверьте содержимое файла."
-                        )
-                        return UPLOAD if replace else ADMIN_UPLOAD
-                    
-                    if replace:
-                        keyboard = [[topic] for topic in topics]
-                        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-                        await update.message.reply_text(
-                            "Файл успешно загружен! Выберите тему:",
-                            reply_markup=reply_markup
-                        )
-                        return CHOOSE_TOPIC
-                    else:
-                        await update.message.reply_text(
-                            "Данные успешно добавлены в базу!",
-                            reply_markup=ReplyKeyboardRemove()
-                        )
-                        return ADMIN_MENU
+                    await update.message.reply_text(
+                        f"Данные успешно {'заменены' if replace else 'добавлены'} в базу!",
+                        reply_markup=ReplyKeyboardRemove()
+                    )
+                    return ADMIN_MENU
                 else:
                     await update.message.reply_text("Ошибка при чтении Excel-файла. Проверьте формат.")
-                    return UPLOAD if replace else ADMIN_UPLOAD
+                    return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
         else:
             await update.message.reply_text("Пожалуйста, отправьте XLS/XLSX файл.")
-            return UPLOAD if replace else ADMIN_UPLOAD
+            return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
 
     def get_topics_from_db(self):
         conn = sqlite3.connect(self.db_path)
@@ -348,12 +341,17 @@ class QuizBot:
             return ConversationHandler.END
         
         keyboard = [
-            ['📁 Загрузить данные', '🧹 Очистить базу'],
-            ['↩️ Выйти из админ-режима']
+            ['📁 Загрузить данные', '📥 Дополнить данные'],
+            ['🧹 Очистить базу', '↩️ Выйти из админ-режима']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
         await update.message.reply_text(
             "🛡️ Добро пожаловать в админ-панель!\n\n"
+            "Ваши возможности:\n"
+            "• 📁 Загрузить данные: Заменить все данные в базе новым XLS/XLSX файлом.\n"
+            "• 📥 Дополнить данные: Добавить новые вопросы из XLS/XLSX файла.\n"
+            "• 🧹 Очистить базу: Удалить все темы и вопросы.\n"
+            "• ↩️ Выйти из админ-режима: Вернуться к обычному режиму.\n\n"
             "Выберите действие:",
             reply_markup=reply_markup
         )
@@ -375,12 +373,21 @@ class QuizBot:
         
         elif choice == "📁 Загрузить данные":
             await update.message.reply_text(
+                "📁 Отправьте XLS/XLSX файл для ЗАМЕНЫ базы данных\n\n"
+                "Формат файла должен содержать колонки:\n"
+                "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
+                reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
+            )
+            return ADMIN_UPLOAD_REPLACE
+        
+        elif choice == "📥 Дополнить данные":
+            await update.message.reply_text(
                 "📥 Отправьте XLS/XLSX файл для ДОПОЛНЕНИЯ базы данных\n\n"
                 "Формат файла должен содержать колонки:\n"
                 "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
                 reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
             )
-            return ADMIN_UPLOAD
+            return ADMIN_UPLOAD_APPEND
         
         elif choice == "🧹 Очистить базу":
             keyboard = [['✅ Да, очистить', '❌ Нет, отмена']]
@@ -394,11 +401,11 @@ class QuizBot:
         
         return ADMIN_MENU
 
-    async def admin_upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def admin_upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, replace=True):
         if update.message.text == "↩️ Отмена":
             return await self.admin_menu(update, context)
         
-        return await self.upload_file(update, context, replace=False)
+        return await self.upload_file(update, context, replace=replace)
 
     async def admin_confirm_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text == "✅ Да, очистить":
@@ -471,12 +478,6 @@ async def init_application():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', quiz_bot.start)],
         states={
-            UPLOAD: [
-                MessageHandler(filters.Document.ALL, quiz_bot.upload_file),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: u.message.reply_text(
-                    "Пожалуйста, отправьте XLS/XLSX файл с вопросами."
-                ))
-            ],
             CHOOSE_TOPIC: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_topic)
             ],
@@ -513,9 +514,13 @@ async def init_application():
             ADMIN_MENU: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_menu)
             ],
-            ADMIN_UPLOAD: [
+            ADMIN_UPLOAD_REPLACE: [
                 MessageHandler(filters.Document.ALL, quiz_bot.admin_upload_file),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_upload_file)
+            ],
+            ADMIN_UPLOAD_APPEND: [
+                MessageHandler(filters.Document.ALL, lambda u, c: quiz_bot.admin_upload_file(u, c, replace=False)),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: quiz_bot.admin_upload_file(u, c, replace=False))
             ],
             ADMIN_CONFIRM_CLEAR: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_confirm_clear)
