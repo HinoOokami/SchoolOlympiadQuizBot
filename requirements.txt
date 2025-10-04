@@ -2,4 +2,3 @@ python-telegram-bot==22.3
 openpyxl==3.1.5
 flask==3.0.3
 gunicorn==22.0.0
-asgiref==3.8.1  # Required for Flask async support

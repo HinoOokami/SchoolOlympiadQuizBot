@@ -322,7 +322,7 @@ class QuizBot:
                     reply_markup=ReplyKeyboardMarkup([['/next']], one_time_keyboard=True)
                 )
                 return ANSWER
-        await update.message.reply_text("Ошибка при получении ответа. Вернитесь к вопросу.", 
+        await update.message.reply_text("Ошибка при получения ответа. Вернитесь к вопросу.", 
                                       reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True))
         return QUESTION
 
@@ -447,11 +447,15 @@ def webhook(token):
         logger.info(f"Received webhook data: {json.dumps(data, ensure_ascii=False)}")
         update = Update.de_json(data, application.bot)
         if update:
-            # Run async processing in the existing event loop
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(application.process_update(update))
-            logger.info("Webhook update processed successfully")
-            return Response("OK", status=200)
+            # Use new event loop for async processing in sync context
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(application.process_update(update))
+                logger.info("Webhook update processed successfully")
+                return Response("OK", status=200)
+            finally:
+                loop.close()
         else:
             logger.error("Failed to parse update from webhook data")
             return Response("Invalid update data", status=400)
@@ -462,11 +466,11 @@ def webhook(token):
 async def init_application():
     global application
     TOKEN = os.getenv("BOT_TOKEN")
+    RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
+    
     if not TOKEN:
         logger.error("BOT_TOKEN не установлен")
         raise ValueError("BOT_TOKEN не установлен!")
-    
-    RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
     if not RENDER_URL:
         logger.error("RENDER_EXTERNAL_URL не установлен")
         raise ValueError("RENDER_EXTERNAL_URL не установлен!")
@@ -476,8 +480,8 @@ async def init_application():
     webhook_url = f'https://{clean_url}/{TOKEN}'
     logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., WEBHOOK_URL={webhook_url}, PORT={os.environ.get('PORT', 10000)}")
     
-    quiz_bot = QuizBot(admin_ids=[123456789, 987654321])  # Replace with real IDs
-    persistence = PicklePersistence(filepath="/app/quiz_conversation_states.pkl")  # Persistent path
+    quiz_bot = QuizBot(admin_ids=[123456789, 987654321])  # Replace with real admin IDs
+    persistence = PicklePersistence(filepath="/app/quiz_conversation_states.pkl")
     application = Application.builder().token(TOKEN).persistence(persistence).build()
     
     conv_handler = ConversationHandler(
@@ -557,13 +561,8 @@ def run_flask():
     logger.info(f"Starting Flask on port {port}")
     app.run(host='0.0.0.0', port=port)
 
-def main():
-    try:
-        asyncio.run(init_application())
-        run_flask()
-    except Exception as e:
-        logger.error(f"Failed to initialize application: {str(e)}")
-        raise
+# Initialize application at module level for Gunicorn
+asyncio.run(init_application())
 
 if __name__ == '__main__':
-    main()
+    run_flask()
