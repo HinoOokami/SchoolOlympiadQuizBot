@@ -432,7 +432,7 @@ def root():
     return 'Not Found', 404
 
 @app.route('/<token>', methods=['POST'])
-async def webhook(token):
+def webhook(token):
     global application
     if token != os.getenv("BOT_TOKEN"):
         logger.warning("Invalid token received")
@@ -447,7 +447,9 @@ async def webhook(token):
         logger.info(f"Received webhook data: {json.dumps(data, ensure_ascii=False)}")
         update = Update.de_json(data, application.bot)
         if update:
-            await application.process_update(update)
+            # Run async processing in the existing event loop
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(application.process_update(update))
             logger.info("Webhook update processed successfully")
             return Response("OK", status=200)
         else:
