@@ -24,9 +24,13 @@ logger = logging.getLogger(__name__)
 (CHOOSE_TOPIC, QUESTION, HINT, ANSWER, 
  ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(8)
 
+# Инициализация Flask приложения
+app = Flask(__name__)
+application = None  # Глобальная переменная для Application
+
 class QuizBot:
     def __init__(self, admin_ids):
-        self.db_path = '/app/quiz_bot.db'
+        self.db_path = '/app/quiz_bot.db'  # Persistent path on Render
         self.admin_ids = admin_ids
         self.init_database()
         self.user_states = {}
@@ -416,28 +420,34 @@ class QuizBot:
             )
         return ADMIN_MENU
 
-# Flask приложение
-app = Flask(__name__)
-application = None  # Глобальная переменная для Application
-
+# Flask routes
 @app.route('/health')
 def health():
     logger.info("Health check endpoint called")
     return 'OK', 200
 
+@app.route('/')
+def root():
+    logger.info("Root endpoint called")
+    return 'Not Found', 404
+
 @app.route('/<token>', methods=['POST'])
-def webhook(token):
+async def webhook(token):
     global application
     if token != os.getenv("BOT_TOKEN"):
         logger.warning("Invalid token received")
         return Response("Invalid token", status=403)
+    
+    if application is None:
+        logger.error("Application not initialized")
+        return Response("Internal server error: Application not initialized", status=500)
     
     try:
         data = request.get_json()
         logger.info(f"Received webhook data: {json.dumps(data, ensure_ascii=False)}")
         update = Update.de_json(data, application.bot)
         if update:
-            asyncio.run(application.process_update(update))
+            await application.process_update(update)
             logger.info("Webhook update processed successfully")
             return Response("OK", status=200)
         else:
@@ -446,11 +456,6 @@ def webhook(token):
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}")
         return Response(f"Error: {str(e)}", status=500)
-
-def run_flask():
-    port = int(os.environ.get('PORT', 10000))  # Используем $PORT для Render
-    logger.info(f"Starting Flask on port {port}")
-    app.run(host='0.0.0.0', port=port)
 
 async def init_application():
     global application
@@ -464,15 +469,13 @@ async def init_application():
         logger.error("RENDER_EXTERNAL_URL не установлен")
         raise ValueError("RENDER_EXTERNAL_URL не установлен!")
     
-    # Очистка URL
     parsed_url = urlparse(RENDER_URL)
-    clean_url = parsed_url.netloc.strip('/')  # Только домен без пути и схемы
-
-    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., RENDER_EXTERNAL_URL={RENDER_URL}, Clean URL={clean_url}, PORT={os.environ.get('PORT', 10000)}")
+    clean_url = parsed_url.netloc.strip('/')
+    webhook_url = f'https://{clean_url}/{TOKEN}'
+    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., WEBHOOK_URL={webhook_url}, PORT={os.environ.get('PORT', 10000)}")
     
-    quiz_bot = QuizBot(admin_ids=[123456789, 987654321])  # Замените на реальные ID
-    
-    persistence = PicklePersistence(filepath="/tmp/quiz_conversation_states.pkl")
+    quiz_bot = QuizBot(admin_ids=[123456789, 987654321])  # Replace with real IDs
+    persistence = PicklePersistence(filepath="/app/quiz_conversation_states.pkl")  # Persistent path
     application = Application.builder().token(TOKEN).persistence(persistence).build()
     
     conv_handler = ConversationHandler(
@@ -534,9 +537,7 @@ async def init_application():
     application.add_handler(conv_handler)
     application.add_handler(admin_handler)
     
-    webhook_url = f'https://{clean_url}/{TOKEN}'
     logger.info(f"Setting webhook URL: {webhook_url}")
-    
     await application.bot.delete_webhook()
     await application.bot.set_webhook(url=webhook_url)
     webhook_info = await application.bot.get_webhook_info()
@@ -549,14 +550,18 @@ async def init_application():
     await application.initialize()
     await application.start()
 
+def run_flask():
+    port = int(os.environ.get('PORT', 10000))
+    logger.info(f"Starting Flask on port {port}")
+    app.run(host='0.0.0.0', port=port)
+
 def main():
-    # Запускаем инициализацию приложения
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_application())
-    
-    # Запускаем Flask в главном потоке
-    run_flask()
+    try:
+        asyncio.run(init_application())
+        run_flask()
+    except Exception as e:
+        logger.error(f"Failed to initialize application: {str(e)}")
+        raise
 
 if __name__ == '__main__':
     main()
