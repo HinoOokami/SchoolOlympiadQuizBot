@@ -74,6 +74,8 @@ class QuizBot:
 
     def parse_excel_file(self, file_path, replace=True):
         try:
+            logger.info(f"Parsing file: {file_path}, replace={replace}")
+
             workbook = openpyxl.load_workbook(file_path)
             sheet = workbook.active
             
@@ -133,6 +135,7 @@ class QuizBot:
             
             conn.commit()
             conn.close()
+            logger.info(f"Inserted {len(inserted_topics)} topics")  # Add after loop
             return True
             
         except Exception as e:
@@ -184,16 +187,18 @@ class QuizBot:
                 os.unlink(tmp_file.name)
                 
                 if success:
+                    logger.info(f"Upload successful: {replace=}, topics added")
                     await update.message.reply_text(
                         f"Данные успешно {'заменены' if replace else 'добавлены'} в базу!",
-                        reply_markup=ReplyKeyboardRemove()
+                        reply_markup=ReplyKeyboardRemove()  # Remove keyboard
                     )
-                    return ADMIN_MENU
+                    return ConversationHandler.END  # End conversation to reset state
                 else:
-                    await update.message.reply_text("Ошибка при чтении Excel-файла. Проверьте формат.")
+                    logger.error("Upload failed: Excel parsing error")
+                    await update.message.reply_text("Ошибка при чтении Excel-файла. Проверьте формат.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True))
                     return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
         else:
-            await update.message.reply_text("Пожалуйста, отправьте XLS/XLSX файл.")
+            await update.message.reply_text("Пожалуйста, отправьте XLS/XLSX файл.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True))
             return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
 
     def get_topics_from_db(self):
@@ -253,9 +258,11 @@ class QuizBot:
                 "/next - следующий вопрос",
                 reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True)
             )
+            logger.info(f"Topic chosen by user {user_id}: {topic_name}, questions loaded: {len(questions)}")
             return QUESTION
         else:
-            await update.message.reply_text("В этой теме нет вопросов.")
+            await update.message.reply_text("В этой теме нет вопросов.", reply_markup=ReplyKeyboardRemove())
+            logger.warning(f"No questions for topic {topic_name} chosen by user {user_id}")
             return CHOOSE_TOPIC
 
     async def show_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -302,9 +309,10 @@ class QuizBot:
                     "/next - следующий вопрос",
                     reply_markup=ReplyKeyboardMarkup([['/answer', '/next']], one_time_keyboard=True)
                 )
+                logger.info(f"Hint shown for user {user_id}, question {current_index}")
                 return HINT
         await update.message.reply_text("Ошибка при получении подсказки. Вернитесь к вопросу.", 
-                                      reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True))
+                                    reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True))
         return QUESTION
 
     async def show_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -321,20 +329,23 @@ class QuizBot:
                     "/next - следующий вопрос",
                     reply_markup=ReplyKeyboardMarkup([['/next']], one_time_keyboard=True)
                 )
+                logger.info(f"Answer shown for user {user_id}, question {current_index}")
                 return ANSWER
         await update.message.reply_text("Ошибка при получении ответа. Вернитесь к вопросу.", 
-                                      reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True))
+                                    reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True))
         return QUESTION
 
     async def next_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id in self.user_states:
             self.user_states[user_id]['current_question_index'] += 1
+            logger.info(f"Next question for user {user_id}, index now {self.user_states[user_id]['current_question_index']}")
             return await self.show_question(update, context)
         return CHOOSE_TOPIC
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.user_states.pop(update.effective_user.id, None)
+        logger.info(f"Conversation canceled by user {update.effective_user.id}")
         await update.message.reply_text("Операция отменена.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
@@ -425,11 +436,18 @@ class QuizBot:
     async def admin_confirm_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text == "✅ Да, очистить":
             self.clear_database()
+            logger.info(f"Database cleared by admin {update.effective_user.id}")
             await update.message.reply_text(
                 "🧹 База данных успешно очищена!",
-                reply_markup=ReplyKeyboardRemove()
+                reply_markup=ReplyKeyboardRemove()  # Remove keyboard
             )
-        return ADMIN_MENU
+            return ConversationHandler.END
+        else:
+            await update.message.reply_text(
+                "Операция отменена.",
+                reply_markup=ReplyKeyboardRemove()  # Remove keyboard on cancel
+            )
+            return ADMIN_MENU
 
 # Flask routes
 @app.route('/health')
