@@ -489,22 +489,25 @@ def webhook(token):
 async def init_application():
     global application
     TOKEN = os.getenv("BOT_TOKEN")
-    RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
+    REPLIT_DOMAIN = os.getenv("REPLIT_DEV_DOMAIN")
     
     if not TOKEN:
         logger.error("BOT_TOKEN не установлен")
         raise ValueError("BOT_TOKEN не установлен!")
-    if not RENDER_URL:
-        logger.error("RENDER_EXTERNAL_URL не установлен")
-        raise ValueError("RENDER_EXTERNAL_URL не установлен!")
+    if not REPLIT_DOMAIN:
+        logger.error("REPLIT_DEV_DOMAIN не установлен")
+        raise ValueError("REPLIT_DEV_DOMAIN не установлен!")
     
-    parsed_url = urlparse(RENDER_URL)
-    clean_url = parsed_url.netloc.strip('/')
-    webhook_url = f'https://{clean_url}/{TOKEN}'
-    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., WEBHOOK_URL={webhook_url}, PORT={os.environ.get('PORT', 10000)}")
+    webhook_url = f'https://{REPLIT_DOMAIN}/{TOKEN}'
+    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., WEBHOOK_URL={webhook_url}, PORT={os.environ.get('PORT', 5000)}")
     
-    quiz_bot = QuizBot(admin_ids=[123456789, 987654321])  # Replace with real IDs
-    persistence = PicklePersistence(filepath="/app/quiz_conversation_states.pkl")  # Persistent path
+    admin_ids_str = os.getenv("ADMIN_IDS", "")
+    admin_ids = [int(id.strip()) for id in admin_ids_str.split(',') if id.strip().isdigit()]
+    if not admin_ids:
+        logger.warning("No ADMIN_IDS configured, admin features will be unavailable")
+    
+    quiz_bot = QuizBot(admin_ids=admin_ids)
+    persistence = PicklePersistence(filepath="quiz_conversation_states.pkl")
     application = Application.builder().token(TOKEN).persistence(persistence).build()
     
     conv_handler = ConversationHandler(
@@ -580,7 +583,7 @@ async def init_application():
     await application.start()
 
 def run_flask():
-    port = int(os.environ.get('PORT', 10000))
+    port = int(os.environ.get('PORT', 5000))
     logger.info(f"Starting Flask on port {port}")
     app.run(host='0.0.0.0', port=port)
 
