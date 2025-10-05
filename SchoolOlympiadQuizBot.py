@@ -366,13 +366,15 @@ class QuizBot:
         user_id = update.effective_user.id
         
         if user_id not in self.admin_ids:
+            await update.message.reply_text("❌ Доступ запрещен. Вы не администратор.", reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
         
         if choice == "↩️ Выйти из админ-режима":
             await update.message.reply_text(
                 "✅ Вы вышли из админ-режима",
-                reply_markup=ReplyKeyboardRemove()
+                reply_markup=ReplyKeyboardRemove()  # Ensure keyboard is removed
             )
+            self.user_states.pop(user_id, None)  # Clear user state to reset conversation
             return ConversationHandler.END
         
         elif choice == "📁 Загрузить данные":
@@ -403,6 +405,15 @@ class QuizBot:
             )
             return ADMIN_CONFIRM_CLEAR
         
+        # If choice is invalid, keep the admin panel active
+        keyboard = [
+            ['📁 Загрузить данные', '📥 Дополнить данные'],
+            ['🧹 Очистить базу', '↩️ Выйти из админ-режима']
+        ]
+        await update.message.reply_text(
+            "Пожалуйста, выберите действие из меню:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
+        )
         return ADMIN_MENU
 
     async def admin_upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, replace=True):
@@ -447,7 +458,7 @@ def webhook(token):
         logger.info(f"Received webhook data: {json.dumps(data, ensure_ascii=False)}")
         update = Update.de_json(data, application.bot)
         if update:
-            asyncio.new_event_loop().run_until_complete(application.process_update(update))
+            asyncio.run(application.process_update(update))
             logger.info("Webhook update processed successfully")
             return Response("OK", status=200)
         else:
