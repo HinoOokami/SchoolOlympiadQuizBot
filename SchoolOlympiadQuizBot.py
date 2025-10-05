@@ -30,7 +30,7 @@ application = None  # Глобальная переменная для Applicati
 
 class QuizBot:
     def __init__(self, admin_ids):
-        self.db_path = '/app/quiz_bot.db'  # Persistent path on Render
+        self.db_path = 'quiz_bot.db'  # Persistent path on Replit root
         self.admin_ids = admin_ids
         self.init_database()
         self.user_states = {}
@@ -322,7 +322,7 @@ class QuizBot:
                     reply_markup=ReplyKeyboardMarkup([['/next']], one_time_keyboard=True)
                 )
                 return ANSWER
-        await update.message.reply_text("Ошибка при получения ответа. Вернитесь к вопросу.", 
+        await update.message.reply_text("Ошибка при получении ответа. Вернитесь к вопросу.", 
                                       reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True))
         return QUESTION
 
@@ -447,15 +447,9 @@ def webhook(token):
         logger.info(f"Received webhook data: {json.dumps(data, ensure_ascii=False)}")
         update = Update.de_json(data, application.bot)
         if update:
-            # Use new event loop for async processing in sync context
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(application.process_update(update))
-                logger.info("Webhook update processed successfully")
-                return Response("OK", status=200)
-            finally:
-                loop.close()
+            asyncio.new_event_loop().run_until_complete(application.process_update(update))
+            logger.info("Webhook update processed successfully")
+            return Response("OK", status=200)
         else:
             logger.error("Failed to parse update from webhook data")
             return Response("Invalid update data", status=400)
@@ -480,8 +474,8 @@ async def init_application():
     webhook_url = f'https://{clean_url}/{TOKEN}'
     logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., WEBHOOK_URL={webhook_url}, PORT={os.environ.get('PORT', 10000)}")
     
-    quiz_bot = QuizBot(admin_ids=[123456789, 987654321])  # Replace with real admin IDs
-    persistence = PicklePersistence(filepath="/app/quiz_conversation_states.pkl")
+    quiz_bot = QuizBot(admin_ids=[123456789, 987654321])  # Replace with real IDs
+    persistence = PicklePersistence(filepath="/app/quiz_conversation_states.pkl")  # Persistent path
     application = Application.builder().token(TOKEN).persistence(persistence).build()
     
     conv_handler = ConversationHandler(
