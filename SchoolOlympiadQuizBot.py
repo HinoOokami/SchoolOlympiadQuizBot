@@ -476,9 +476,17 @@ def webhook(token):
         logger.info(f"Received webhook data: {json.dumps(data, ensure_ascii=False)}")
         update = Update.de_json(data, application.bot)
         if update:
-            asyncio.run(application.process_update(update))
-            logger.info("Webhook update processed successfully")
-            return Response("OK", status=200)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(application.process_update(update))
+                logger.info("Webhook update processed successfully")
+                return Response("OK", status=200)
+            except Exception as inner_e:
+                logger.error(f"Error in process_update: {str(inner_e)}")
+                return Response("Error in process_update", status=500)
+            finally:
+                loop.close()
         else:
             logger.error("Failed to parse update from webhook data")
             return Response("Invalid update data", status=400)
