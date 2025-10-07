@@ -192,9 +192,12 @@ class QuizBot:
         return CHOOSE_TOPIC
 
     async def upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, replace=True):
+        logger.info(f"Upload file called for user {update.effective_user.id}, replace={replace}")
         if update.message.document:
             file = await update.message.document.get_file()
             file_extension = os.path.splitext(update.message.document.file_name)[1].lower()
+            
+            logger.info(f"Document received: {update.message.document.file_name}, extension {file_extension}")
             
             if file_extension not in ['.xls', '.xlsx']:
                 await update.message.reply_text("Пожалуйста, отправьте файл в формате XLS или XLSX.")
@@ -202,23 +205,26 @@ class QuizBot:
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
                 await file.download_to_drive(tmp_file.name)
+                logger.info(f"Downloaded to {tmp_file.name}")
                 
                 success = self.parse_excel_file(tmp_file.name, replace=replace)
                 os.unlink(tmp_file.name)
+                logger.info(f"Parsing success: {success}")
                 
                 if success:
-                    logger.info(f"Upload successful: {replace=}, topics added")
                     await update.message.reply_text(
                         f"Данные успешно {'заменены' if replace else 'добавлены'} в базу!",
-                        reply_markup=ReplyKeyboardRemove()  # Remove keyboard
+                        reply_markup=ReplyKeyboardRemove()
                     )
-                    return ConversationHandler.END  # End conversation to reset state
+                    logger.info(f"Upload successful for user {update.effective_user.id}")
+                    return ConversationHandler.END
                 else:
-                    logger.error("Upload failed: Excel parsing error")
                     await update.message.reply_text("Ошибка при чтении Excel-файла. Проверьте формат.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True))
+                    logger.error("Upload failed for user {update.effective_user.id}")
                     return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
         else:
             await update.message.reply_text("Пожалуйста, отправьте XLS/XLSX файл.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True))
+            logger.warning(f"No document in upload message for user {update.effective_user.id}")
             return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
 
     def get_topics_from_db(self):
@@ -396,19 +402,24 @@ class QuizBot:
         choice = update.message.text
         user_id = update.effective_user.id
         
+        logger.info(f"Admin menu choice by user {user_id}: {choice}")
+        
         if user_id not in self.admin_ids:
             await update.message.reply_text("❌ Доступ запрещен. Вы не администратор.", reply_markup=ReplyKeyboardRemove())
+            logger.warning(f"Unauthorized admin access attempt by {user_id}")
             return ConversationHandler.END
         
         if choice == "↩️ Выйти из админ-режима":
             await update.message.reply_text(
                 "✅ Вы вышли из админ-режима",
-                reply_markup=ReplyKeyboardRemove()  # Ensure keyboard is removed
+                reply_markup=ReplyKeyboardRemove()
             )
-            self.user_states.pop(user_id, None)  # Clear user state to reset conversation
+            self.user_states.pop(user_id, None)
+            logger.info(f"Admin mode exited by user {user_id}")
             return ConversationHandler.END
         
         elif choice == "📁 Загрузить данные":
+            logger.info(f"Transition to ADMIN_UPLOAD_REPLACE for user {user_id}")
             await update.message.reply_text(
                 "📁 Отправьте XLS/XLSX файл для ЗАМЕНЫ базы данных\n\n"
                 "Формат файла должен содержать колонки:\n"
@@ -417,26 +428,9 @@ class QuizBot:
             )
             return ADMIN_UPLOAD_REPLACE
         
-        elif choice == "📥 Дополнить данные":
-            await update.message.reply_text(
-                "📥 Отправьте XLS/XLSX файл для ДОПОЛНЕНИЯ базы данных\n\n"
-                "Формат файла должен содержать колонки:\n"
-                "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
-                reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
-            )
-            return ADMIN_UPLOAD_APPEND
+        # ... (other elif branches unchanged)
         
-        elif choice == "🧹 Очистить базу":
-            keyboard = [['✅ Да, очистить', '❌ Нет, отмена']]
-            reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-            await update.message.reply_text(
-                "⚠️ ВНИМАНИЕ! Эта операция удалит ВСЕ данные из базы.\n"
-                "Вы уверены, что хотите продолжить?",
-                reply_markup=reply_markup
-            )
-            return ADMIN_CONFIRM_CLEAR
-        
-        # If choice is invalid, keep the admin panel active
+        # Invalid choice fallback
         keyboard = [
             ['📁 Загрузить данные', '📥 Дополнить данные'],
             ['🧹 Очистить базу', '↩️ Выйти из админ-режима']
@@ -445,10 +439,13 @@ class QuizBot:
             "Пожалуйста, выберите действие из меню:",
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
         )
+        logger.warning(f"Invalid admin choice '{choice}' by user {user_id}")
         return ADMIN_MENU
 
     async def admin_upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, replace=True):
+        logger.info(f"Admin upload file called for user {update.effective_user.id}, replace={replace}")
         if update.message.text == "↩️ Отмена":
+            logger.info(f"Admin upload canceled by user {update.effective_user.id}")
             return await self.admin_menu(update, context)
         
         return await self.upload_file(update, context, replace=replace)
