@@ -84,12 +84,15 @@ class QuizBot:
             
             headers = []
             for cell in sheet[1]:
-                headers.append(cell.value)
+                headers.append(cell.value if cell.value else "")  # Handle empty headers
             logger.info(f"Headers found: {headers}")
             
             required_headers = ['Тема', 'Вопрос', 'Подсказка', 'Ответ']
+            header_indices = {}
             for req in required_headers:
-                if req not in headers:
+                try:
+                    header_indices[req] = headers.index(req)
+                except ValueError:
                     raise ValueError(f"Отсутствует колонка: {req}")
             
             conn = sqlite3.connect(self.db_path)
@@ -102,54 +105,59 @@ class QuizBot:
             
             inserted_topics = set()
             inserted_count = 0
+            skipped_rows = 0
             for row_num in range(2, sheet.max_row + 1):
                 row_data = []
                 for col_num in range(1, len(headers) + 1):
                     cell_value = sheet.cell(row=row_num, column=col_num).value
-                    row_data.append(cell_value)
+                    row_data.append(cell_value if cell_value else "")
                 
-                if not any(row_data):
+                if not any(str(cell).strip() for cell in row_data):
                     continue
                 
-                if len(row_data) < len(required_headers):
-                    logger.warning(f"Пропущена строка {row_num}: недостаточно колонок")
+                try:
+                    topic_name = row_data[header_indices['Тема']]
+                    question_text = row_data[header_indices['Вопрос']]
+                    hint = row_data[header_indices['Подсказка']]
+                    answer = row_data[header_indices['Ответ']]
+                    
+                    if not all([str(topic_name).strip(), str(question_text).strip(), str(answer).strip()]):
+                        skipped_rows += 1
+                        logger.warning(f"Пропущена строка {row_num}: отсутствуют обязательные поля (topic: '{topic_name}', question: '{question_text}', answer: '{answer}')")
+                        continue
+                    
+                    difficulty = 'medium'
+                    if 'Сложность' in header_indices:
+                        difficulty = row_data[header_indices['Сложность']] or 'medium'
+                    
+                    if not str(topic_name).strip():
+                        skipped_rows += 1
+                        logger.warning(f"Пропущена строка {row_num}: пустая тема")
+                        continue
+                    
+                    c.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic_name,))
+                    if topic_name not in inserted_topics:
+                        inserted_topics.add(topic_name)
+                        logger.info(f"Inserted topic: {topic_name}")
+                    
+                    c.execute("SELECT id FROM topics WHERE name = ?", (topic_name,))
+                    topic_id = c.fetchone()[0]
+                    
+                    c.execute('''INSERT INTO questions (topic_id, question_text, hint, answer, difficulty)
+                                VALUES (?, ?, ?, ?, ?)''',
+                            (topic_id, question_text, hint, answer, difficulty))
+                    inserted_count += 1
+                    
+                except Exception as row_e:
+                    logger.warning(f"Error in row {row_num}: {str(row_e)}")
+                    skipped_rows += 1
                     continue
-                
-                topic_name = row_data[headers.index('Тема')]
-                question_text = row_data[headers.index('Вопрос')]
-                hint = row_data[headers.index('Подсказка')]
-                answer = row_data[headers.index('Ответ')]
-                
-                if not all([topic_name, question_text, answer]):
-                    logger.warning(f"Пропущена строка {row_num}: отсутствуют обязательные поля")
-                    continue
-                
-                difficulty = 'medium'
-                if 'Сложность' in headers:
-                    difficulty = row_data[headers.index('Сложность')] or 'medium'
-                
-                if not str(topic_name).strip():
-                    logger.warning(f"Пропущена строка {row_num}: пустая тема")
-                    continue
-                
-                c.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic_name,))
-                if topic_name not in inserted_topics:
-                    inserted_topics.add(topic_name)
-                    logger.info(f"Inserted topic: {topic_name}")
-                
-                c.execute("SELECT id FROM topics WHERE name = ?", (topic_name,))
-                topic_id = c.fetchone()[0]
-                
-                c.execute('''INSERT INTO questions (topic_id, question_text, hint, answer, difficulty)
-                            VALUES (?, ?, ?, ?, ?)''',
-                        (topic_id, question_text, hint, answer, difficulty))
-                inserted_count += 1
             
             conn.commit()
             conn.close()
-            logger.info(f"Upload complete: inserted {inserted_count} questions, {len(inserted_topics)} unique topics")
+            logger.info(f"Upload complete: inserted {inserted_count} questions, {len(inserted_topics)} unique topics, skipped {skipped_rows} rows")
             return True
-            
+        
         except Exception as e:
             logger.error(f"Error parsing Excel file: {e}")
             return False
@@ -494,6 +502,9 @@ def webhook(token):
                 loop.run_until_complete(application.process_update(update))
                 logger.info("Webhook update processed successfully")
                 return Response("OK", status=200)
+            except telegram.error.NetworkError as ne:
+                logger.error(f"NetworkError in process_update: {str(ne)} (likely loop closed)")
+                return Response("Network error in process_update", status=500)
             except Exception as inner_e:
                 logger.error(f"Error in process_update: {str(inner_e)}")
                 return Response("Error in process_update", status=500)
