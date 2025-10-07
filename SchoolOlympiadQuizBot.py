@@ -12,6 +12,9 @@ import openpyxl
 from flask import Flask, request, Response
 import asyncio
 import json
+import nest_asyncio
+
+nest_asyncio.apply()
 
 # Настройка логирования
 logging.basicConfig(
@@ -82,6 +85,7 @@ class QuizBot:
             headers = []
             for cell in sheet[1]:
                 headers.append(cell.value)
+            logger.info(f"Headers found: {headers}")
             
             required_headers = ['Тема', 'Вопрос', 'Подсказка', 'Ответ']
             for req in required_headers:
@@ -94,7 +98,10 @@ class QuizBot:
             if replace:
                 c.execute("DELETE FROM questions")
                 c.execute("DELETE FROM topics")
+                logger.info("Cleared existing data")
             
+            inserted_topics = set()
+            inserted_count = 0
             for row_num in range(2, sheet.max_row + 1):
                 row_data = []
                 for col_num in range(1, len(headers) + 1):
@@ -126,16 +133,21 @@ class QuizBot:
                     continue
                 
                 c.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic_name,))
+                if topic_name not in inserted_topics:
+                    inserted_topics.add(topic_name)
+                    logger.info(f"Inserted topic: {topic_name}")
+                
                 c.execute("SELECT id FROM topics WHERE name = ?", (topic_name,))
                 topic_id = c.fetchone()[0]
                 
                 c.execute('''INSERT INTO questions (topic_id, question_text, hint, answer, difficulty)
-                             VALUES (?, ?, ?, ?, ?)''',
-                         (topic_id, question_text, hint, answer, difficulty))
+                            VALUES (?, ?, ?, ?, ?)''',
+                        (topic_id, question_text, hint, answer, difficulty))
+                inserted_count += 1
             
             conn.commit()
             conn.close()
-            logger.info(f"Inserted {len(inserted_topics)} topics")  # Add after loop
+            logger.info(f"Upload complete: inserted {inserted_count} questions, {len(inserted_topics)} unique topics")
             return True
             
         except Exception as e:
