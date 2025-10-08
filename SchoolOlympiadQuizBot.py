@@ -80,6 +80,11 @@ class QuizBot:
             logger.info(f"Parsing file: {file_path}, replace={replace}")
 
             workbook = openpyxl.load_workbook(file_path)
+
+            logger.info(f"Sheet max_row: {sheet.max_row}, max_column: {sheet.max_column}")
+            for i, row in enumerate(sheet.iter_rows(values_only=True), 1):
+                logger.info(f"Row {i}: {row}")
+
             sheet = workbook.active
             
             headers = []
@@ -121,9 +126,13 @@ class QuizBot:
                     hint = row_data[header_indices['Подсказка']]
                     answer = row_data[header_indices['Ответ']]
                     
-                    if not all([str(topic_name).strip(), str(question_text).strip(), str(answer).strip()]):
+                    topic_clean = str(topic_name).strip() if topic_name else ''
+                    question_clean = str(question_text).strip() if question_text else ''
+                    answer_clean = str(answer).strip() if answer else ''
+
+                    if not (topic_clean and question_clean and answer_clean):
                         skipped_rows += 1
-                        logger.warning(f"Пропущена строка {row_num}: отсутствуют обязательные поля (topic: '{topic_name}', question: '{question_text}', answer: '{answer}')")
+                        logger.warning(f"Пропущена строка {row_num}: отсутствуют обязательные поля")
                         continue
                     
                     difficulty = 'medium'
@@ -520,7 +529,12 @@ class QuizBot:
             logger.info(f"Admin upload canceled by user {update.effective_user.id}")
             return await self.admin_menu(update, context)
         
-        return await self.upload_file(update, context, replace=replace)
+        result = await self.upload_file(update, context, replace=replace)
+
+        topics_after = self.get_topics_from_db()
+        logger.info(f"Topics in DB after upload: {topics_after}")
+
+        return result
 
     async def admin_confirm_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text == "✅ Да, очистить":
