@@ -1,20 +1,13 @@
 import os
 import logging
 import sqlite3
-from urllib.parse import urlparse
+import tempfile
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, 
+    Application, CommandHandler, MessageHandler,
     ContextTypes, ConversationHandler, filters, PicklePersistence
 )
-import tempfile
 import openpyxl
-#from flask import Flask, request, Response
-import asyncio
-import json
-import nest_asyncio
-
-nest_asyncio.apply()
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,17 +16,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Состояния для ConversationHandler
-(CHOOSE_TOPIC, QUESTION, HINT, ANSWER, 
+# Состояния
+(CHOOSE_TOPIC, QUESTION, HINT, ANSWER,
  ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(8)
 
-# Инициализация Flask приложения
-#app = Flask(__name__)
-application = None  # Глобальная переменная для Application
 
 class QuizBot:
     def __init__(self, admin_ids):
-        self.db_path = 'quiz_bot.db'  # Persistent path on Replit root
+        self.db_path = 'quiz_bot.db'
         self.admin_ids = admin_ids
         self.init_database()
         self.user_states = {}
@@ -42,11 +32,8 @@ class QuizBot:
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA foreign_keys = ON")
         c = conn.cursor()
-        
         c.execute('''CREATE TABLE IF NOT EXISTS topics
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      name TEXT UNIQUE)''')
-        
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
         c.execute('''CREATE TABLE IF NOT EXISTS questions
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
                       topic_id INTEGER,
@@ -55,120 +42,84 @@ class QuizBot:
                       answer TEXT,
                       difficulty TEXT DEFAULT 'medium',
                       FOREIGN KEY (topic_id) REFERENCES topics (id) ON DELETE CASCADE)''')
-        
         conn.commit()
         conn.close()
 
     def save_user_to_db(self, user):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        
         c.execute('''CREATE TABLE IF NOT EXISTS users
-                     (id INTEGER PRIMARY KEY,
-                      first_name TEXT,
-                      username TEXT)''')
-        
+                     (id INTEGER PRIMARY KEY, first_name TEXT, username TEXT)''')
         c.execute('''INSERT OR IGNORE INTO users (id, first_name, username)
-                     VALUES (?, ?, ?)''',
-                 (user.id, user.first_name, user.username))
-        
+                     VALUES (?, ?, ?)''', (user.id, user.first_name, user.username))
         conn.commit()
         conn.close()
 
     def parse_excel_file(self, file_path, replace=True):
         try:
             logger.info(f"Parsing file: {file_path}, replace={replace}")
-
             workbook = openpyxl.load_workbook(file_path)
-
-            logger.info(f"Sheet max_row: {sheet.max_row}, max_column: {sheet.max_column}")
-            for i, row in enumerate(sheet.iter_rows(values_only=True), 1):
-                logger.info(f"Row {i}: {row}")
-
             sheet = workbook.active
-            
-            headers = []
-            for cell in sheet[1]:
-                headers.append(cell.value if cell.value else "")  # Handle empty headers
-            logger.info(f"Headers found: {headers}")
-            
-            required_headers = ['Тема', 'Вопрос', 'Подсказка', 'Ответ']
-            header_indices = {}
-            for req in required_headers:
-                try:
-                    header_indices[req] = headers.index(req)
-                except ValueError:
-                    raise ValueError(f"Отсутствует колонка: {req}")
-            
+
+            headers = [cell.value for cell in sheet[1]]
+            logger.info(f"Headers: {headers}")
+
+            required = ['Тема', 'Вопрос', 'Подсказка', 'Ответ']
+            for col in required:
+                if col not in headers:
+                    raise ValueError(f"Отсутствует колонка: {col}")
+            idx = {col: headers.index(col) for col in required}
+
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
-            
             if replace:
                 c.execute("DELETE FROM questions")
                 c.execute("DELETE FROM topics")
-                logger.info("Cleared existing data")
-            
-            inserted_topics = set()
-            inserted_count = 0
-            skipped_rows = 0
-            for row_num in range(2, sheet.max_row + 1):
-                row_data = []
-                for col_num in range(1, len(headers) + 1):
-                    cell_value = sheet.cell(row=row_num, column=col_num).value
-                    row_data.append(cell_value if cell_value else "")
-                
-                if not any(str(cell).strip() for cell in row_data):
-                    continue
-                
-                try:
-                    topic_name = row_data[header_indices['Тема']]
-                    question_text = row_data[header_indices['Вопрос']]
-                    hint = row_data[header_indices['Подсказка']]
-                    answer = row_data[header_indices['Ответ']]
-                    
-                    topic_clean = str(topic_name).strip() if topic_name else ''
-                    question_clean = str(question_text).strip() if question_text else ''
-                    answer_clean = str(answer).strip() if answer else ''
+                logger.info("Cleared DB")
 
-                    if not (topic_clean and question_clean and answer_clean):
-                        skipped_rows += 1
-                        logger.warning(f"Пропущена строка {row_num}: отсутствуют обязательные поля")
-                        continue
-                    
-                    difficulty = 'medium'
-                    if 'Сложность' in header_indices:
-                        difficulty = row_data[header_indices['Сложность']] or 'medium'
-                    
-                    if not str(topic_name).strip():
-                        skipped_rows += 1
-                        logger.warning(f"Пропущена строка {row_num}: пустая тема")
-                        continue
-                    
-                    c.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic_name,))
-                    if topic_name not in inserted_topics:
-                        inserted_topics.add(topic_name)
-                        logger.info(f"Inserted topic: {topic_name}")
-                    
-                    c.execute("SELECT id FROM topics WHERE name = ?", (topic_name,))
-                    topic_id = c.fetchone()[0]
-                    
-                    c.execute('''INSERT INTO questions (topic_id, question_text, hint, answer, difficulty)
-                                VALUES (?, ?, ?, ?, ?)''',
-                            (topic_id, question_text, hint, answer, difficulty))
-                    inserted_count += 1
-                    
-                except Exception as row_e:
-                    logger.warning(f"Error in row {row_num}: {str(row_e)}")
-                    skipped_rows += 1
+            inserted_topics = set()
+            inserted = 0
+            skipped = 0
+
+            for row_num in range(2, sheet.max_row + 1):
+                row = [sheet.cell(row=row_num, column=i + 1).value for i in range(len(headers))]
+                if not any(str(cell).strip() if cell else '' for cell in row):
                     continue
-            
+
+                topic = row[idx['Тема']]
+                question = row[idx['Вопрос']]
+                hint = row[idx['Подсказка']]
+                answer = row[idx['Ответ']]
+
+                if not (topic and question and answer):
+                    skipped += 1
+                    logger.warning(f"Пропущена строка {row_num}: не хватает данных")
+                    continue
+
+                topic = str(topic).strip()
+                question = str(question).strip()
+                hint = str(hint).strip() if hint else ""
+                answer = str(answer).strip()
+
+                c.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic,))
+                if topic not in inserted_topics:
+                    inserted_topics.add(topic)
+                    logger.info(f"Добавлена тема: {topic}")
+
+                c.execute("SELECT id FROM topics WHERE name = ?", (topic,))
+                topic_id = c.fetchone()[0]
+
+                c.execute('''INSERT INTO questions (topic_id, question_text, hint, answer)
+                             VALUES (?, ?, ?, ?)''', (topic_id, question, hint, answer))
+                inserted += 1
+
             conn.commit()
             conn.close()
-            logger.info(f"Upload complete: inserted {inserted_count} questions, {len(inserted_topics)} unique topics, skipped {skipped_rows} rows")
+            logger.info(f"Загружено: {inserted} вопросов, {len(inserted_topics)} тем, пропущено: {skipped}")
             return True
-        
+
         except Exception as e:
-            logger.error(f"Error parsing Excel file: {e}")
+            logger.error(f"Ошибка парсинга Excel: {e}", exc_info=True)
             return False
 
     def clear_database(self):
@@ -179,10 +130,30 @@ class QuizBot:
         conn.commit()
         conn.close()
 
+    def get_topics_from_db(self):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("SELECT name FROM topics ORDER BY name")
+        topics = [row[0] for row in c.fetchall()]
+        conn.close()
+        return topics
+
+    def get_questions_for_topic(self, topic_name):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT q.id, q.question_text, q.hint, q.answer
+                     FROM questions q
+                     JOIN topics t ON q.topic_id = t.id
+                     WHERE t.name = ?''', (topic_name,))
+        questions = [{'id': r[0], 'text': r[1], 'hint': r[2], 'answer': r[3]} for r in c.fetchall()]
+        conn.close()
+        return questions
+
+    # === Handlers ===
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         self.save_user_to_db(user)
-        
         topics = self.get_topics_from_db()
         if not topics:
             await update.message.reply_text(
@@ -190,479 +161,212 @@ class QuizBot:
                 "На данный момент нет доступных тем. Обратитесь к администратору."
             )
             return ConversationHandler.END
-        
+
         keyboard = [[topic] for topic in topics]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
         await update.message.reply_text(
-            f"Привет, {user.first_name}! Я бот для викторин.\n\n"
-            "Выберите тему для вопросов:",
-            reply_markup=reply_markup
+            f"Привет, {user.first_name}! Выберите тему:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
         )
         return CHOOSE_TOPIC
 
-    async def upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, replace=True):
-        logger.info(f"Upload file called for user {update.effective_user.id}, replace={replace}")
-        if update.message.document:
-            file = await update.message.document.get_file()
-            file_extension = os.path.splitext(update.message.document.file_name)[1].lower()
-            
-            logger.info(f"Document received: {update.message.document.file_name}, extension {file_extension}")
-            
-            if file_extension not in ['.xls', '.xlsx']:
-                await update.message.reply_text("Пожалуйста, отправьте файл в формате XLS или XLSX.")
-                return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
-                await file.download_to_drive(tmp_file.name)
-                logger.info(f"Downloaded to {tmp_file.name}")
-                
-                success = self.parse_excel_file(tmp_file.name, replace=replace)
-                os.unlink(tmp_file.name)
-                logger.info(f"Parsing success: {success}")
-                
-                if success:
-                    await update.message.reply_text(
-                        f"Данные успешно {'заменены' if replace else 'добавлены'} в базу!",
-                        reply_markup=ReplyKeyboardRemove()
-                    )
-                    logger.info(f"Upload successful for user {update.effective_user.id}")
-                    return ConversationHandler.END
-                else:
-                    await update.message.reply_text("Ошибка при чтении Excel-файла. Проверьте формат.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True))
-                    logger.error("Upload failed for user {update.effective_user.id}")
-                    return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
-        else:
-            await update.message.reply_text("Пожалуйста, отправьте XLS/XLSX файл.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True))
-            logger.warning(f"No document in upload message for user {update.effective_user.id}")
-            return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
-
-    def get_topics_from_db(self):
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
-        c.execute("SELECT name FROM topics ORDER BY name")
-        topics = [row[0] for row in c.fetchall()]
-        
-        conn.close()
-        return topics
-
-    def get_questions_for_topic(self, topic_name):
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
-        c.execute('''SELECT q.id, q.question_text, q.hint, q.answer, q.difficulty
-                     FROM questions q
-                     JOIN topics t ON q.topic_id = t.id
-                     WHERE LOWER(t.name) = LOWER(?)
-                     ORDER BY q.id''', (topic_name,))
-        
-        questions = []
-        for row in c.fetchall():
-            questions.append({
-                'id': row[0],
-                'text': row[1],
-                'hint': row[2],
-                'answer': row[3],
-                'difficulty': row[4]
-            })
-        
-        conn.close()
-        return questions
-
     async def choose_topic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        topic_name = update.message.text
+        topic = update.message.text
         user_id = update.effective_user.id
-        
-        if user_id not in self.user_states:
-            self.user_states[user_id] = {}
-        
-        self.user_states[user_id]['current_topic'] = topic_name
-        questions = self.get_questions_for_topic(topic_name)
-        self.user_states[user_id]['questions'] = questions
-        self.user_states[user_id]['current_question_index'] = 0
-        
-        if questions:
-            question = questions[0]
-            await update.message.reply_text(
-                f"📚 Тема: {topic_name}\n"
-                f"💡 Сложность: {question.get('difficulty', 'medium')}\n\n"
-                f"❓ Вопрос: {question['text']}\n\n"
-                "Используйте:\n"
-                "/hint - для подсказки\n"
-                "/answer - для ответа\n"
-                "/next - следующий вопрос",
-                reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True)
-            )
-            logger.info(f"Topic chosen by user {user_id}: {topic_name}, questions loaded: {len(questions)}")
-            return QUESTION
-        else:
-            await update.message.reply_text("В этой теме нет вопросов.", reply_markup=ReplyKeyboardRemove())
-            logger.warning(f"No questions for topic {topic_name} chosen by user {user_id}")
+        questions = self.get_questions_for_topic(topic)
+        if not questions:
+            await update.message.reply_text("В этой теме нет вопросов.")
             return CHOOSE_TOPIC
 
-    async def show_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        if user_id in self.user_states:
-            questions = self.user_states[user_id]['questions']
-            current_index = self.user_states[user_id]['current_question_index']
-            
-            if current_index < len(questions):
-                question = questions[current_index]
-                topic = self.user_states[user_id]['current_topic']
-                
-                await update.message.reply_text(
-                    f"📚 Тема: {topic}\n"
-                    f"💡 Сложность: {question.get('difficulty', 'medium')}\n\n"
-                    f"❓ Вопрос: {question['text']}\n\n"
-                    "Используйте:\n"
-                    "/hint - для подсказки\n"
-                    "/answer - для ответа\n"
-                    "/next - следующий вопрос",
-                    reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True)
-                )
-                return QUESTION
-            else:
-                await update.message.reply_text("🎉 Вопросы в этой теме закончились!")
-                return CHOOSE_TOPIC
-        else:
-            await update.message.reply_text("Сначала выберите тему!")
-            return CHOOSE_TOPIC
+        self.user_states[user_id] = {
+            'topic': topic,
+            'questions': questions,
+            'index': 0
+        }
+
+        q = questions[0]
+        await update.message.reply_text(
+            f"📚 Тема: {topic}\n\n❓ {q['text']}\n\n"
+            "Команды:\n/hint — подсказка\n/answer — ответ\n/next — следующий",
+            reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True)
+        )
+        return QUESTION
 
     async def show_hint(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        if user_id in self.user_states:
-            questions = self.user_states[user_id]['questions']
-            current_index = self.user_states[user_id]['current_question_index']
-            
-            if current_index < len(questions):
-                question = questions[current_index]
-                
-                await update.message.reply_text(
-                    f"💡 Подсказка: {question['hint']}\n\n"
-                    "Используйте:\n"
-                    "/answer - для ответа\n"
-                    "/next - следующий вопрос",
-                    reply_markup=ReplyKeyboardMarkup([['/answer', '/next']], one_time_keyboard=True)
-                )
-                logger.info(f"Hint shown for user {user_id}, question {current_index}")
-                return HINT
-        await update.message.reply_text("Ошибка при получении подсказки. Вернитесь к вопросу.", 
-                                    reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True))
-        return QUESTION
+        state = self.user_states.get(user_id)
+        if not state or state['index'] >= len(state['questions']):
+            await update.message.reply_text("Нет активного вопроса.")
+            return CHOOSE_TOPIC
+
+        q = state['questions'][state['index']]
+        await update.message.reply_text(
+            f"💡 Подсказка: {q['hint']}\n\n/answer — ответ\n/next — следующий",
+            reply_markup=ReplyKeyboardMarkup([['/answer', '/next']], one_time_keyboard=True)
+        )
+        return HINT
 
     async def show_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        if user_id in self.user_states:
-            questions = self.user_states[user_id]['questions']
-            current_index = self.user_states[user_id]['current_question_index']
-            
-            if current_index < len(questions):
-                question = questions[current_index]
-                
-                await update.message.reply_text(
-                    f"✅ Ответ: {question['answer']}\n\n"
-                    "/next - следующий вопрос",
-                    reply_markup=ReplyKeyboardMarkup([['/next']], one_time_keyboard=True)
-                )
-                logger.info(f"Answer shown for user {user_id}, question {current_index}")
-                return ANSWER
-        await update.message.reply_text("Ошибка при получении ответа. Вернитесь к вопросу.", 
-                                    reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True))
-        return QUESTION
+        state = self.user_states.get(user_id)
+        if not state or state['index'] >= len(state['questions']):
+            await update.message.reply_text("Нет активного вопроса.")
+            return CHOOSE_TOPIC
+
+        q = state['questions'][state['index']]
+        await update.message.reply_text(
+            f"✅ Ответ: {q['answer']}\n\n/next — следующий вопрос",
+            reply_markup=ReplyKeyboardMarkup([['/next']], one_time_keyboard=True)
+        )
+        return ANSWER
 
     async def next_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        if user_id in self.user_states:
-            self.user_states[user_id]['current_question_index'] += 1
-            logger.info(f"Next question for user {user_id}, index now {self.user_states[user_id]['current_question_index']}")
-            return await self.show_question(update, context)
-        return CHOOSE_TOPIC
+        state = self.user_states.get(user_id)
+        if not state:
+            await update.message.reply_text("Сначала выберите тему.")
+            return CHOOSE_TOPIC
+
+        state['index'] += 1
+        if state['index'] >= len(state['questions']):
+            await update.message.reply_text("🎉 Вопросы закончились!")
+            del self.user_states[user_id]
+            return ConversationHandler.END
+
+        q = state['questions'][state['index']]
+        await update.message.reply_text(
+            f"📚 Тема: {state['topic']}\n\n❓ {q['text']}\n\n"
+            "Команды:\n/hint — подсказка\n/answer — ответ\n/next — следующий",
+            reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True)
+        )
+        return QUESTION
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.user_states.pop(update.effective_user.id, None)
-        logger.info(f"Conversation canceled by user {update.effective_user.id}")
         await update.message.reply_text("Операция отменена.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
+
+    # === Admin handlers ===
 
     async def admin_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if user_id not in self.admin_ids:
-            await update.message.reply_text("❌ Доступ запрещен. Вы не администратор.")
+            await update.message.reply_text("❌ Доступ запрещён.")
             return ConversationHandler.END
-        
-        keyboard = [
-            ['📁 Загрузить данные', '📥 Дополнить данные'],
-            ['🧹 Очистить базу', '↩️ Выйти из админ-режима']
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
-        await update.message.reply_text(
-            "🛡️ Добро пожаловать в админ-панель!\n\n"
-            "Ваши возможности:\n"
-            "• 📁 Загрузить данные: Заменить все данные в базе новым XLS/XLSX файлом.\n"
-            "• 📥 Дополнить данные: Добавить новые вопросы из XLS/XLSX файла.\n"
-            "• 🧹 Очистить базу: Удалить все темы и вопросы.\n"
-            "• ↩️ Выйти из админ-режима: Вернуться к обычному режиму.\n\n"
-            "Выберите действие:",
-            reply_markup=reply_markup
-        )
-        return ADMIN_MENU
 
-    
-        choice = update.message.text
-        user_id = update.effective_user.id
-        
-        if user_id not in self.admin_ids:
-            await update.message.reply_text("❌ Доступ запрещен. Вы не администратор.", reply_markup=ReplyKeyboardRemove())
-            return ConversationHandler.END
-        
-        if choice == "↩️ Выйти из админ-режима":
-            await update.message.reply_text(
-                "✅ Вы вышли из админ-режима",
-                reply_markup=ReplyKeyboardRemove()  # Ensure keyboard is removed
-            )
-            self.user_states.pop(user_id, None)  # Clear user state to reset conversation
-            return ConversationHandler.END
-        
-        elif choice == "📁 Загрузить данные":
-            await update.message.reply_text(
-                "📁 Отправьте XLS/XLSX файл для ЗАМЕНЫ базы данных\n\n"
-                "Формат файла должен содержать колонки:\n"
-                "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
-                reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
-            )
-            return ADMIN_UPLOAD_REPLACE
-        
-        elif choice == "📥 Дополнить данные":
-            await update.message.reply_text(
-                "📥 Отправьте XLS/XLSX файл для ДОПОЛНЕНИЯ базы данных\n\n"
-                "Формат файла должен содержать колонки:\n"
-                "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
-                reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
-            )
-            return ADMIN_UPLOAD_APPEND
-        
-        elif choice == "🧹 Очистить базу":
-            keyboard = [['✅ Да, очистить', '❌ Нет, отмена']]
-            reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-            await update.message.reply_text(
-                "⚠️ ВНИМАНИЕ! Эта операция удалит ВСЕ данные из базы.\n"
-                "Вы уверены, что хотите продолжить?",
-                reply_markup=reply_markup
-            )
-            return ADMIN_CONFIRM_CLEAR
-        
-        # If choice is invalid, keep the admin panel active
         keyboard = [
             ['📁 Загрузить данные', '📥 Дополнить данные'],
-            ['🧹 Очистить базу', '↩️ Выйти из админ-режима']
+            ['🧹 Очистить базу', '↩️ Выйти']
         ]
         await update.message.reply_text(
-            "Пожалуйста, выберите действие из меню:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
+            "🛡️ Админ-панель:\n"
+            "• 📁 — заменить все данные\n"
+            "• 📥 — добавить к существующим\n"
+            "• 🧹 — удалить всё",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
         return ADMIN_MENU
 
     async def admin_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        choice = update.message.text
         user_id = update.effective_user.id
-        
-        logger.info(f"Admin menu choice by user {user_id}: {choice}, returning state {ADMIN_UPLOAD_REPLACE if choice == '📁 Загрузить данные' else 'ADMIN_UPLOAD_APPEND' if choice == '📥 Дополнить данные' else 'ADMIN_CONFIRM_CLEAR' if choice == '🧹 Очистить базу' else 'ADMIN_MENU'}")
-                
         if user_id not in self.admin_ids:
-            await update.message.reply_text("❌ Доступ запрещен. Вы не администратор.", reply_markup=ReplyKeyboardRemove())
-            logger.warning(f"Unauthorized admin access attempt by {user_id}")
+            await update.message.reply_text("❌ Доступ запрещён.", reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
-        
-        if choice == "↩️ Выйти из админ-режима":
-            await update.message.reply_text(
-                "✅ Вы вышли из админ-режима",
-                reply_markup=ReplyKeyboardRemove()
-            )
-            self.user_states.pop(user_id, None)
-            logger.info(f"Admin mode exited by user {user_id}")
+
+        choice = update.message.text
+        if choice == "↩️ Выйти":
+            await update.message.reply_text("Вы вышли.", reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
-        
         elif choice == "📁 Загрузить данные":
-            logger.info(f"Transition to ADMIN_UPLOAD_REPLACE for user {user_id}")
-            await update.message.reply_text(
-                "📁 Отправьте XLS/XLSX файл для ЗАМЕНЫ базы данных\n\n"
-                "Формат файла должен содержать колонки:\n"
-                "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
-                reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
-            )
+            await update.message.reply_text("Отправьте XLSX файл для замены данных.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']]))
             return ADMIN_UPLOAD_REPLACE
-        
         elif choice == "📥 Дополнить данные":
-            await update.message.reply_text(
-                "📥 Отправьте XLS/XLSX файл для ДОПОЛНЕНИЯ базы данных\n\n"
-                "Формат файла должен содержать колонки:\n"
-                "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
-                reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
-            )
+            await update.message.reply_text("Отправьте XLSX файл для добавления данных.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']]))
             return ADMIN_UPLOAD_APPEND
-        
         elif choice == "🧹 Очистить базу":
-            keyboard = [['✅ Да, очистить', '❌ Нет, отмена']]
-            reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-            await update.message.reply_text(
-                "⚠️ ВНИМАНИЕ! Эта операция удалит ВСЕ данные из базы.\n"
-                "Вы уверены, что хотите продолжить?",
-                reply_markup=reply_markup
-            )
+            await update.message.reply_text("Точно очистить? (да/нет)", reply_markup=ReplyKeyboardMarkup([['✅ Да', '❌ Нет']]))
             return ADMIN_CONFIRM_CLEAR
-        
-        # Invalid choice fallback
-        keyboard = [
-            ['📁 Загрузить данные', '📥 Дополнить данные'],
-            ['🧹 Очистить базу', '↩️ Выйти из админ-режима']
-        ]
-        await update.message.reply_text(
-            "Пожалуйста, выберите действие из меню:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
-        )
-        logger.warning(f"Invalid admin choice '{choice}' by user {user_id}")
-        return ADMIN_MENU
-
-    async def admin_upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, replace=True):
-        logger.info(f"Admin upload file called for user {update.effective_user.id}, replace={replace}")
-        if update.message.text == "↩️ Отмена":
-            logger.info(f"Admin upload canceled by user {update.effective_user.id}")
-            return await self.admin_menu(update, context)
-        
-        result = await self.upload_file(update, context, replace=replace)
-
-        topics_after = self.get_topics_from_db()
-        logger.info(f"Topics in DB after upload: {topics_after}")
-
-        return result
-
-    async def admin_confirm_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.message.text == "✅ Да, очистить":
-            self.clear_database()
-            logger.info(f"Database cleared by admin {update.effective_user.id}")
-            await update.message.reply_text(
-                "🧹 База данных успешно очищена!",
-                reply_markup=ReplyKeyboardRemove()  # Remove keyboard
-            )
-            return ConversationHandler.END
         else:
-            await update.message.reply_text(
-                "Операция отменена.",
-                reply_markup=ReplyKeyboardRemove()  # Remove keyboard on cancel
-            )
+            await update.message.reply_text("Выберите действие из меню.")
             return ADMIN_MENU
 
-# Flask routes
-#@app.route('/health')
-def health():
-    logger.info("Health check endpoint called")
-    return 'OK', 200
+    async def admin_upload_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE, replace=True):
+        if update.message.text == "↩️ Отмена":
+            return await self.admin_menu(update, context)
 
-#@app.route('/')
-def root():
-    logger.info("Root endpoint called")
-    return 'Not Found', 404
+        if not update.message.document:
+            await update.message.reply_text("Отправьте XLSX файл.")
+            return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
 
-#@app.route('/<token>', methods=['POST'])
-def webhook(token):
-    global application
-    if token != os.getenv("BOT_TOKEN"):
-        logger.warning("Invalid token received")
-        return Response("Invalid token", status=403)
-    
-    if application is None:
-        logger.error("Application not initialized")
-        return Response("Internal server error: Application not initialized", status=500)
-    
-    try:
-        data = request.get_json()
-        logger.info(f"Received webhook data: {json.dumps(data, ensure_ascii=False)}")
-        update = Update.de_json(data, application.bot)
-        if update:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(application.process_update(update))
-                logger.info("Webhook update processed successfully")
-                return Response("OK", status=200)
-            except telegram.error.NetworkError as ne:
-                logger.error(f"NetworkError in process_update: {str(ne)} (likely loop closed)")
-                return Response("Network error in process_update", status=500)
-            except Exception as inner_e:
-                logger.error(f"Error in process_update: {str(inner_e)}")
-                return Response("Error in process_update", status=500)
-            finally:
-                loop.close()
+        doc = update.message.document
+        if not doc.file_name.endswith(('.xlsx', '.xls')):
+            await update.message.reply_text("Только XLS/XLSX файлы.")
+            return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
+
+        file = await doc.get_file()
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+            await file.download_to_drive(tmp.name)
+            success = self.parse_excel_file(tmp.name, replace=replace)
+            os.unlink(tmp.name)
+
+        if success:
+            await update.message.reply_text("✅ Данные успешно загружены!", reply_markup=ReplyKeyboardRemove())
+            return ConversationHandler.END
         else:
-            logger.error("Failed to parse update from webhook data")
-            return Response("Invalid update data", status=400)
-    except Exception as e:
-        logger.error(f"Error processing webhook: {str(e)}")
-        return Response(f"Error: {str(e)}", status=500)
+            await update.message.reply_text("❌ Ошибка при загрузке файла.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']]))
+            return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
 
-async def init_application():
-    global application
+    async def admin_confirm_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == "✅ Да":
+            self.clear_database()
+            await update.message.reply_text("🧹 База очищена.", reply_markup=ReplyKeyboardRemove())
+            return ConversationHandler.END
+        else:
+            await update.message.reply_text("Очистка отменена.", reply_markup=ReplyKeyboardRemove())
+            return ADMIN_MENU
+
+
+# === Main ===
+
+async def main():
     TOKEN = os.getenv("BOT_TOKEN")
-    REPLIT_DOMAIN = os.getenv("REPLIT_DEV_DOMAIN")
-    
     if not TOKEN:
-        logger.error("BOT_TOKEN не установлен")
-        raise ValueError("BOT_TOKEN не установлен!")
-    if not REPLIT_DOMAIN:
-        logger.error("REPLIT_DEV_DOMAIN не установлен")
-        raise ValueError("REPLIT_DEV_DOMAIN не установлен!")
-    
-    webhook_url = f'https://{REPLIT_DOMAIN}/{TOKEN}'
-    logger.info(f"Environment: BOT_TOKEN={TOKEN[:4]}..., WEBHOOK_URL={webhook_url}, PORT={os.environ.get('PORT', 5000)}")
-    
+        raise ValueError("BOT_TOKEN не задан в secrets!")
+
     admin_ids_str = os.getenv("ADMIN_IDS", "")
-    admin_ids = [int(id.strip()) for id in admin_ids_str.split(',') if id.strip().isdigit()]
+    admin_ids = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip().isdigit()]
     if not admin_ids:
-        logger.warning("No ADMIN_IDS configured, admin features will be unavailable")
-    
+        logger.warning("ADMIN_IDS не задан — админка недоступна")
+
     quiz_bot = QuizBot(admin_ids=admin_ids)
-    persistence = PicklePersistence(filepath="quiz_conversation_states.pkl")
-    application = Application.builder().token(TOKEN).persistence(persistence).build()
-    
+    persistence = PicklePersistence(filepath="conversation_states.pkl")
+    app = Application.builder().token(TOKEN).persistence(persistence).build()
+
+    # Основной диалог
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', quiz_bot.start)],
         states={
-            CHOOSE_TOPIC: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_topic)
-            ],
+            CHOOSE_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_topic)],
             QUESTION: [
                 CommandHandler('hint', quiz_bot.show_hint),
                 CommandHandler('answer', quiz_bot.show_answer),
                 CommandHandler('next', quiz_bot.next_question),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: u.message.reply_text(
-                    "Используйте команды:\n/hint - подсказка\n/answer - ответ\n/next - следующий вопрос"
-                ))
             ],
             HINT: [
                 CommandHandler('answer', quiz_bot.show_answer),
                 CommandHandler('next', quiz_bot.next_question),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: u.message.reply_text(
-                    "Используйте команды:\n/answer - ответ\n/next - следующий вопрос"
-                ))
             ],
-            ANSWER: [
-                CommandHandler('next', quiz_bot.next_question),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: u.message.reply_text(
-                    "Используйте команду /next для перехода к следующему вопросу"
-                ))
-            ]
+            ANSWER: [CommandHandler('next', quiz_bot.next_question)],
         },
         fallbacks=[CommandHandler('cancel', quiz_bot.cancel)],
-        name="main_conversation",
+        name="quiz_conv",
         persistent=True
     )
-    
+
+    # Админка
     admin_handler = ConversationHandler(
         entry_points=[CommandHandler('admin', quiz_bot.admin_start)],
         states={
-            ADMIN_MENU: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_menu)
-            ],
+            ADMIN_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_menu)],
             ADMIN_UPLOAD_REPLACE: [
                 MessageHandler(filters.Document.ALL, quiz_bot.admin_upload_file),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_upload_file)
@@ -671,54 +375,33 @@ async def init_application():
                 MessageHandler(filters.Document.ALL, lambda u, c: quiz_bot.admin_upload_file(u, c, replace=False)),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: quiz_bot.admin_upload_file(u, c, replace=False))
             ],
-            ADMIN_CONFIRM_CLEAR: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_confirm_clear)
-            ]
+            ADMIN_CONFIRM_CLEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_confirm_clear)]
         },
         fallbacks=[CommandHandler('cancel', quiz_bot.cancel)],
-        name="admin_conversation",
+        name="admin_conv",
         persistent=True
     )
-    
-    application.add_handler(conv_handler)
-    application.add_handler(admin_handler)
-    
-    logger.info(f"Setting webhook URL: {webhook_url}")
-    await application.bot.delete_webhook()
-    await application.bot.set_webhook(url=webhook_url)
-    webhook_info = await application.bot.get_webhook_info()
-    logger.info(f"Webhook info: {webhook_info}")
-    
-    if webhook_info.url != webhook_url:
-        logger.error(f"Webhook setup failed: expected {webhook_url}, got {webhook_info.url}")
-        raise RuntimeError("Webhook setup failed")
-    
-    await application.initialize()
-    await application.start()
 
-#def run_flask():
-#    port = int(os.environ.get('PORT', 5000))
-#    logger.info(f"Starting Flask on port {port}")
-#    app.run(host='0.0.0.0', port=port)
+    app.add_handler(conv_handler)
+    app.add_handler(admin_handler)
 
-# Initialize application at module level for Gunicorn
-asyncio.run(init_application())
+    logger.info("Бот запускается в режиме polling...")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    logger.info("Бот работает. Нажмите Ctrl+C для остановки.")
 
-#if __name__ == '__main__':
-#    run_flask()
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except KeyboardInterrupt:
+        logger.info("Остановка бота...")
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+
 
 if __name__ == '__main__':
     import asyncio
     asyncio.run(main())
-
-async def main():
-    await init_application()  # Эта функция уже создаёт application и устанавливает webhook
-    # Теперь просто ждём
-    logger.info("Bot is running with webhook. Use Ctrl+C to stop.")
-    try:
-        while True:
-            await asyncio.sleep(3600)  # Keep alive
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-        await application.stop()
-        await application.shutdown()
