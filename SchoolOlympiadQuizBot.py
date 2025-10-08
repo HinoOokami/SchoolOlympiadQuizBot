@@ -398,12 +398,67 @@ class QuizBot:
         )
         return ADMIN_MENU
 
+    
+        choice = update.message.text
+        user_id = update.effective_user.id
+        
+        if user_id not in self.admin_ids:
+            await update.message.reply_text("❌ Доступ запрещен. Вы не администратор.", reply_markup=ReplyKeyboardRemove())
+            return ConversationHandler.END
+        
+        if choice == "↩️ Выйти из админ-режима":
+            await update.message.reply_text(
+                "✅ Вы вышли из админ-режима",
+                reply_markup=ReplyKeyboardRemove()  # Ensure keyboard is removed
+            )
+            self.user_states.pop(user_id, None)  # Clear user state to reset conversation
+            return ConversationHandler.END
+        
+        elif choice == "📁 Загрузить данные":
+            await update.message.reply_text(
+                "📁 Отправьте XLS/XLSX файл для ЗАМЕНЫ базы данных\n\n"
+                "Формат файла должен содержать колонки:\n"
+                "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
+                reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
+            )
+            return ADMIN_UPLOAD_REPLACE
+        
+        elif choice == "📥 Дополнить данные":
+            await update.message.reply_text(
+                "📥 Отправьте XLS/XLSX файл для ДОПОЛНЕНИЯ базы данных\n\n"
+                "Формат файла должен содержать колонки:\n"
+                "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
+                reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
+            )
+            return ADMIN_UPLOAD_APPEND
+        
+        elif choice == "🧹 Очистить базу":
+            keyboard = [['✅ Да, очистить', '❌ Нет, отмена']]
+            reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+            await update.message.reply_text(
+                "⚠️ ВНИМАНИЕ! Эта операция удалит ВСЕ данные из базы.\n"
+                "Вы уверены, что хотите продолжить?",
+                reply_markup=reply_markup
+            )
+            return ADMIN_CONFIRM_CLEAR
+        
+        # If choice is invalid, keep the admin panel active
+        keyboard = [
+            ['📁 Загрузить данные', '📥 Дополнить данные'],
+            ['🧹 Очистить базу', '↩️ Выйти из админ-режима']
+        ]
+        await update.message.reply_text(
+            "Пожалуйста, выберите действие из меню:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
+        )
+        return ADMIN_MENU
+
     async def admin_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         choice = update.message.text
         user_id = update.effective_user.id
         
-        logger.info(f"Admin menu choice by user {user_id}: {choice}")
-        
+        logger.info(f"Admin menu choice by user {user_id}: {choice}, returning state {ADMIN_UPLOAD_REPLACE if choice == '📁 Загрузить данные' else 'ADMIN_UPLOAD_APPEND' if choice == '📥 Дополнить данные' else 'ADMIN_CONFIRM_CLEAR' if choice == '🧹 Очистить базу' else 'ADMIN_MENU'}")
+                
         if user_id not in self.admin_ids:
             await update.message.reply_text("❌ Доступ запрещен. Вы не администратор.", reply_markup=ReplyKeyboardRemove())
             logger.warning(f"Unauthorized admin access attempt by {user_id}")
@@ -428,7 +483,24 @@ class QuizBot:
             )
             return ADMIN_UPLOAD_REPLACE
         
-        # ... (other elif branches unchanged)
+        elif choice == "📥 Дополнить данные":
+            await update.message.reply_text(
+                "📥 Отправьте XLS/XLSX файл для ДОПОЛНЕНИЯ базы данных\n\n"
+                "Формат файла должен содержать колонки:\n"
+                "• Тема\n• Вопрос\n• Подсказка\n• Ответ\n• Сложность (опционально)",
+                reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']], one_time_keyboard=True)
+            )
+            return ADMIN_UPLOAD_APPEND
+        
+        elif choice == "🧹 Очистить базу":
+            keyboard = [['✅ Да, очистить', '❌ Нет, отмена']]
+            reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+            await update.message.reply_text(
+                "⚠️ ВНИМАНИЕ! Эта операция удалит ВСЕ данные из базы.\n"
+                "Вы уверены, что хотите продолжить?",
+                reply_markup=reply_markup
+            )
+            return ADMIN_CONFIRM_CLEAR
         
         # Invalid choice fallback
         keyboard = [
