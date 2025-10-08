@@ -9,7 +9,7 @@ from telegram.ext import (
 )
 import tempfile
 import openpyxl
-from flask import Flask, request, Response
+#from flask import Flask, request, Response
 import asyncio
 import json
 import nest_asyncio
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
  ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(8)
 
 # Инициализация Flask приложения
-app = Flask(__name__)
+#app = Flask(__name__)
 application = None  # Глобальная переменная для Application
 
 class QuizBot:
@@ -553,17 +553,17 @@ class QuizBot:
             return ADMIN_MENU
 
 # Flask routes
-@app.route('/health')
+#@app.route('/health')
 def health():
     logger.info("Health check endpoint called")
     return 'OK', 200
 
-@app.route('/')
+#@app.route('/')
 def root():
     logger.info("Root endpoint called")
     return 'Not Found', 404
 
-@app.route('/<token>', methods=['POST'])
+#@app.route('/<token>', methods=['POST'])
 def webhook(token):
     global application
     if token != os.getenv("BOT_TOKEN"):
@@ -696,13 +696,29 @@ async def init_application():
     await application.initialize()
     await application.start()
 
-def run_flask():
-    port = int(os.environ.get('PORT', 5000))
-    logger.info(f"Starting Flask on port {port}")
-    app.run(host='0.0.0.0', port=port)
+#def run_flask():
+#    port = int(os.environ.get('PORT', 5000))
+#    logger.info(f"Starting Flask on port {port}")
+#    app.run(host='0.0.0.0', port=port)
 
 # Initialize application at module level for Gunicorn
 asyncio.run(init_application())
 
+#if __name__ == '__main__':
+#    run_flask()
+
 if __name__ == '__main__':
-    run_flask()
+    import asyncio
+    asyncio.run(main())
+
+async def main():
+    await init_application()  # Эта функция уже создаёт application и устанавливает webhook
+    # Теперь просто ждём
+    logger.info("Bot is running with webhook. Use Ctrl+C to stop.")
+    try:
+        while True:
+            await asyncio.sleep(3600)  # Keep alive
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+        await application.stop()
+        await application.shutdown()
