@@ -357,8 +357,11 @@ async def main():
             ],
             ANSWER: [CommandHandler('next', quiz_bot.next_question)],
         },
-        fallbacks=[CommandHandler('cancel', quiz_bot.cancel)],
-        name="quiz_conv",
+        fallbacks=[
+            CommandHandler('cancel', quiz_bot.cancel),
+            CommandHandler('start', quiz_bot.start),  # ← ДОБАВЛЕНО
+        ],
+        name="main_conversation",
         persistent=True
     )
 
