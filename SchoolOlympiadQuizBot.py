@@ -17,7 +17,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Состояния
-(CHOOSE_TOPIC, QUESTION, HINT, ANSWER,
+# (CHOOSE_YEAR, CHOOSE_TOPIC, QUESTION, HINT, ANSWER,
+#  ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(8)
+
+(CHOOSE_YEAR, QUESTION, HINT, ANSWER,
  ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(8)
 
 
@@ -32,15 +35,19 @@ class QuizBot:
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA foreign_keys = ON")
         c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS years
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, year INTEGER UNIQUE)''')
         c.execute('''CREATE TABLE IF NOT EXISTS topics
                      (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
         c.execute('''CREATE TABLE IF NOT EXISTS questions
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      year_id INTEGER,
                       topic_id INTEGER,
                       question_text TEXT,
                       hint TEXT,
                       answer TEXT,
                       difficulty TEXT DEFAULT 'medium',
+                      FOREIGN KEY (year_id) REFERENCES years (id) ON DELETE CASCADE,
                       FOREIGN KEY (topic_id) REFERENCES topics (id) ON DELETE CASCADE)''')
         conn.commit()
         conn.close()
@@ -64,7 +71,7 @@ class QuizBot:
             headers = [cell.value for cell in sheet[1]]
             logger.info(f"Headers: {headers}")
 
-            required = ['Тема', 'Вопрос', 'Подсказка', 'Ответ']
+            required = ['Год', 'Тема', 'Вопрос', 'Подсказка', 'Ответ']
             for col in required:
                 if col not in headers:
                     raise ValueError(f"Отсутствует колонка: {col}")
@@ -75,8 +82,10 @@ class QuizBot:
             if replace:
                 c.execute("DELETE FROM questions")
                 c.execute("DELETE FROM topics")
+                c.execute("DELETE FROM years")
                 logger.info("Cleared DB")
 
+            inserted_years = set()
             inserted_topics = set()
             inserted = 0
             skipped = 0
@@ -86,12 +95,19 @@ class QuizBot:
                 if not any(str(cell).strip() if cell else '' for cell in row):
                     continue
 
+                try:
+                    year = int(float(row[idx['Год']]))  # обрабатывает и 2023, и 2023.0
+                except (ValueError, TypeError):
+                    skipped += 1
+                    logger.warning(f"Некорректный год в строке {row_num}")
+                    continue
+
                 topic = row[idx['Тема']]
                 question = row[idx['Вопрос']]
                 hint = row[idx['Подсказка']]
                 answer = row[idx['Ответ']]
 
-                if not (topic and question and answer):
+                if not (year and topic and question and answer):
                     skipped += 1
                     logger.warning(f"Пропущена строка {row_num}: не хватает данных")
                     continue
@@ -101,21 +117,29 @@ class QuizBot:
                 hint = str(hint).strip() if hint else ""
                 answer = str(answer).strip()
 
+                c.execute("INSERT OR IGNORE INTO years (year) VALUES (?)", (year,))
+                if year not in inserted_years:
+                    inserted_years.add(year)
+                    logger.info(f"Добавлен год: {year}")
+                
                 c.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic,))
                 if topic not in inserted_topics:
                     inserted_topics.add(topic)
                     logger.info(f"Добавлена тема: {topic}")
 
+                c.execute("SELECT id FROM years WHERE year = ?", (year,))
+                year_id = c.fetchone()[0]
+
                 c.execute("SELECT id FROM topics WHERE name = ?", (topic,))
                 topic_id = c.fetchone()[0]
 
-                c.execute('''INSERT INTO questions (topic_id, question_text, hint, answer)
-                             VALUES (?, ?, ?, ?)''', (topic_id, question, hint, answer))
+                c.execute('''INSERT INTO questions (year_id, topic_id, question_text, hint, answer)
+                             VALUES (?, ?, ?, ?, ?)''', (year_id, topic_id, question, hint, answer))
                 inserted += 1
 
             conn.commit()
             conn.close()
-            logger.info(f"Загружено: {inserted} вопросов, {len(inserted_topics)} тем, пропущено: {skipped}")
+            logger.info(f"Загружено: {inserted} вопросов, {len(inserted_topics)} тем, {len(inserted_years)} годов, пропущено: {skipped}")
             return True
 
         except Exception as e:
@@ -127,9 +151,18 @@ class QuizBot:
         c = conn.cursor()
         c.execute("DELETE FROM questions")
         c.execute("DELETE FROM topics")
+        c.execute("DELETE FROM years")
         conn.commit()
         conn.close()
 
+    def get_years_from_db(self):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("SELECT year FROM years ORDER BY year")
+        years = [row[0] for row in c.fetchall()]
+        conn.close()
+        return years
+    
     def get_topics_from_db(self):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
@@ -138,6 +171,17 @@ class QuizBot:
         conn.close()
         return topics
 
+    def get_questions_for_year(self, year):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT q.id, q.question_text, q.hint, q.answer
+                     FROM questions q
+                     JOIN years y ON q.year_id = y.id
+                     WHERE y.year = ?''', (year,))
+        questions = [{'id': r[0], 'text': r[1], 'hint': r[2], 'answer': r[3]} for r in c.fetchall()]
+        conn.close()
+        return questions
+    
     def get_questions_for_topic(self, topic_name):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
@@ -154,49 +198,81 @@ class QuizBot:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         self.save_user_to_db(user)
-        topics = self.get_topics_from_db()
-        if not topics:
+        years = self.get_years_from_db()
+        #topics = self.get_topics_from_db()
+        if not years:
             await update.message.reply_text(
                 f"Привет, {user.first_name}! Я бот для викторин.\n\n"
-                "На данный момент нет доступных тем. Обратитесь к администратору."
+                "На данный момент нет доступных годов для заданий. Обратитесь к администратору."
             )
             return ConversationHandler.END
 
-        keyboard = [[topic] for topic in topics]
+        keyboard = [[year] for year in years]
         await update.message.reply_text(
-            f"Привет, {user.first_name}! Выберите тему:",
+            f"Привет, {user.first_name}! Выберите год:",
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
         )
-        return CHOOSE_TOPIC
+        
+        # keyboard = [[topic] for topic in topics]
+        # await update.message.reply_text(
+        #     f"Привет, {user.first_name}! Выберите тему:",
+        #     reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+        # )
+        # return CHOOSE_TOPIC
+        return CHOOSE_YEAR
 
-    async def choose_topic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        topic = update.message.text
+    async def choose_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        year = update.message.text
         user_id = update.effective_user.id
-        questions = self.get_questions_for_topic(topic)
+        questions = self.get_questions_for_year(year)
         if not questions:
-            await update.message.reply_text("В этой теме нет вопросов.")
-            return CHOOSE_TOPIC
+            await update.message.reply_text("В этом году нет вопросов.")
+            # return CHOOSE_TOPIC
+            return CHOOSE_YEAR
 
         self.user_states[user_id] = {
-            'topic': topic,
+            'year': year,
             'questions': questions,
             'index': 0
         }
 
         q = questions[0]
         await update.message.reply_text(
-            f"📚 Тема: {topic}\n\n❓ {q['text']}\n\n"
+            f"📚 Год: {year}\n\n❓ {q['text']}\n\n"
             "Команды:\n/hint — подсказка\n/answer — ответ\n/next — следующий",
             reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True)
         )
         return QUESTION
+    
+    # async def choose_topic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #     topic = update.message.text
+    #     user_id = update.effective_user.id
+    #     questions = self.get_questions_for_topic(topic)
+    #     if not questions:
+    #         await update.message.reply_text("В этой теме нет вопросов.")
+    #         return CHOOSE_TOPIC
+
+    #     self.user_states[user_id] = {
+    #         'topic': topic,
+    #         'questions': questions,
+    #         'index': 0
+    #     }
+
+    #     q = questions[0]
+    #     await update.message.reply_text(
+    #         f"📚 Тема: {topic}\n\n❓ {q['text']}\n\n"
+    #         "Команды:\n/hint — подсказка\n/answer — ответ\n/next — следующий",
+    #         reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True)
+    #     )
+    #     return QUESTION
 
     async def show_hint(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         state = self.user_states.get(user_id)
         if not state or state['index'] >= len(state['questions']):
             await update.message.reply_text("Нет активного вопроса.")
-            return CHOOSE_TOPIC
+            # return CHOOSE_TOPIC
+            return CHOOSE_YEAR
 
         q = state['questions'][state['index']]
         await update.message.reply_text(
@@ -210,7 +286,8 @@ class QuizBot:
         state = self.user_states.get(user_id)
         if not state or state['index'] >= len(state['questions']):
             await update.message.reply_text("Нет активного вопроса.")
-            return CHOOSE_TOPIC
+            # return CHOOSE_TOPIC
+            return CHOOSE_YEAR
 
         q = state['questions'][state['index']]
         await update.message.reply_text(
@@ -224,7 +301,8 @@ class QuizBot:
         state = self.user_states.get(user_id)
         if not state:
             await update.message.reply_text("Сначала выберите тему.")
-            return CHOOSE_TOPIC
+            # return CHOOSE_TOPIC
+            return CHOOSE_YEAR
 
         state['index'] += 1
         if state['index'] >= len(state['questions']):
@@ -233,8 +311,13 @@ class QuizBot:
             return ConversationHandler.END
 
         q = state['questions'][state['index']]
+        # await update.message.reply_text(
+        #     f"📚 Тема: {state['topic']}\n\n❓ {q['text']}\n\n"
+        #     "Команды:\n/hint — подсказка\n/answer — ответ\n/next — следующий",
+        #     reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True)
+        # )
         await update.message.reply_text(
-            f"📚 Тема: {state['topic']}\n\n❓ {q['text']}\n\n"
+            f"📚 Год: {state['year']}\n\n❓ {q['text']}\n\n"
             "Команды:\n/hint — подсказка\n/answer — ответ\n/next — следующий",
             reply_markup=ReplyKeyboardMarkup([['/hint', '/answer', '/next']], one_time_keyboard=True)
         )
@@ -345,7 +428,8 @@ async def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', quiz_bot.start)],
         states={
-            CHOOSE_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_topic)],
+            # CHOOSE_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_topic)],
+            CHOOSE_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_year)],
             QUESTION: [
                 CommandHandler('hint', quiz_bot.show_hint),
                 CommandHandler('answer', quiz_bot.show_answer),
@@ -359,7 +443,7 @@ async def main():
         },
         fallbacks=[
             CommandHandler('cancel', quiz_bot.cancel),
-            CommandHandler('start', quiz_bot.start),  # ← ДОБАВЛЕНО
+            CommandHandler('start', quiz_bot.start),  #
         ],
         name="main_conversation",
         persistent=True
