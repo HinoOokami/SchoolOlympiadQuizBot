@@ -68,6 +68,10 @@ class QuizBot:
             workbook = openpyxl.load_workbook(file_path)
             sheet = workbook.active
 
+            if sheet.max_row < 2:
+                logger.warning("Excel file is empty (no data rows)")
+                return False
+
             headers = [cell.value for cell in sheet[1]]
             logger.info(f"Headers: {headers}")
 
@@ -207,7 +211,7 @@ class QuizBot:
             )
             return ConversationHandler.END
 
-        keyboard = [[year] for year in years]
+        keyboard = [[str(year)] for year in years]
         await update.message.reply_text(
             f"Привет, {user.first_name}! Выберите год:",
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
@@ -222,7 +226,17 @@ class QuizBot:
         return CHOOSE_YEAR
 
     async def choose_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        year = update.message.text
+        try:
+            year = int(update.message.text)
+        except ValueError:
+            years = self.get_years_from_db()
+            keyboard = [[str(y)] for y in years]
+            await update.message.reply_text(
+                "Пожалуйста, выберите год из списка.",
+                reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+            )
+            return CHOOSE_YEAR
+        
         user_id = update.effective_user.id
         questions = self.get_questions_for_year(year)
         if not questions:
@@ -231,7 +245,7 @@ class QuizBot:
             return CHOOSE_YEAR
 
         self.user_states[user_id] = {
-            'year': year,
+            'year': str(year),
             'questions': questions,
             'index': 0
         }
