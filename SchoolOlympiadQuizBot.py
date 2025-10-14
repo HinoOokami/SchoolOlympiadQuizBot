@@ -54,7 +54,8 @@ class QuizBot:
                       answer TEXT,
                       answer_picture TEXT,
                       FOREIGN KEY (year_id) REFERENCES years (id) ON DELETE CASCADE,
-                      FOREIGN KEY (topic_id) REFERENCES topics (id) ON DELETE CASCADE)''')
+                      FOREIGN KEY (topic_id) REFERENCES topics (id) ON DELETE CASCADE,
+                      UNIQUE(year_id, topic_id, question_text, question_picture))''')
         conn.commit()
         conn.close()
 
@@ -161,7 +162,7 @@ class QuizBot:
                 c.execute("SELECT id FROM topics WHERE name = ?", (topic,))
                 topic_id = c.fetchone()[0]
 
-                c.execute('''INSERT INTO questions 
+                c.execute('''INSERT OR REPLACE INTO questions 
                              (year_id, topic_id, question_text, question_picture, 
                               hint, hint_picture, answer, answer_picture)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
@@ -185,6 +186,19 @@ class QuizBot:
         c.execute("DELETE FROM years")
         conn.commit()
         conn.close()
+
+    def clear_images(self):
+        # Удаляем все файлы изображений
+        if os.path.exists(IMAGE_DIR):
+            for filename in os.listdir(IMAGE_DIR):
+                file_path = os.path.join(IMAGE_DIR, filename)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                        logger.info(f"Deleted image file: {filename}")
+                except Exception as e:
+                    logger.error(f"Failed to delete {file_path}: {e}")
+        logger.info("All image files deleted.")
 
     def get_years_from_db(self):
         conn = sqlite3.connect(self.db_path)
@@ -434,7 +448,8 @@ class QuizBot:
     async def admin_confirm_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text == "✅ Да":
             self.clear_database()
-            await update.message.reply_text("🧹 База очищена.", reply_markup=ReplyKeyboardRemove())
+            self.clear_images()
+            await update.message.reply_text("🧹 Данные очищены.", reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
         else:
             await update.message.reply_text("Очистка отменена.", reply_markup=ReplyKeyboardRemove())
