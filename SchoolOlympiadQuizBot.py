@@ -10,6 +10,7 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, filters, PicklePersistence
 )
 import openpyxl
+import re
 
 # Настройка логирования
 logging.basicConfig(
@@ -269,7 +270,7 @@ class QuizBot:
         if q['q_pic']:
             pic_path = os.path.join(IMAGE_DIR, q['q_pic'])
             if os.path.exists(pic_path):
-                await update.message.reply_photo(photo=open(pic_path, 'rb'))
+                await update.message.reply_photo(photo=pic_path)
             else:
                 await update.message.reply_text(f"🖼️ Изображение вопроса не найдено: {q['q_pic']}")
 
@@ -291,7 +292,7 @@ class QuizBot:
         if q['h_pic']:
             pic_path = os.path.join(IMAGE_DIR, q['h_pic'])
             if os.path.exists(pic_path):
-                await update.message.reply_photo(photo=open(pic_path, 'rb'))
+                await update.message.reply_photo(photo=pic_path)
             else:
                 await update.message.reply_text(f"🖼️ Изображение подсказки не найдено: {q['h_pic']}")
 
@@ -314,7 +315,7 @@ class QuizBot:
         if q['a_pic']:
             pic_path = os.path.join(IMAGE_DIR, q['a_pic'])
             if os.path.exists(pic_path):
-                await update.message.reply_photo(photo=open(pic_path, 'rb'))
+                await update.message.reply_photo(photo=pic_path)
             else:
                 await update.message.reply_text(f"🖼️ Изображение ответа не найдено: {q['a_pic']}")
 
@@ -464,16 +465,26 @@ async def main():
                 CommandHandler('hint', quiz_bot.show_hint),
                 CommandHandler('answer', quiz_bot.show_answer),
                 CommandHandler('next', quiz_bot.next_question),
+                MessageHandler(filters.Regex(re.compile(r"^(Подсказка|Hint)$", re.IGNORECASE)), quiz_bot.show_hint),
+                MessageHandler(filters.Regex(re.compile(r"^(Ответ|Answer)$", re.IGNORECASE)), quiz_bot.show_answer),
+                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_question),
             ],
             HINT: [
                 CommandHandler('answer', quiz_bot.show_answer),
                 CommandHandler('next', quiz_bot.next_question),
+                MessageHandler(filters.Regex(re.compile(r"^(Ответ|Answer)$", re.IGNORECASE)), quiz_bot.show_answer),
+                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_question),
             ],
-            ANSWER: [CommandHandler('next', quiz_bot.next_question)],
+            ANSWER: [
+                CommandHandler('next', quiz_bot.next_question),
+                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_question),
+            ],
         },
         fallbacks=[
             CommandHandler('cancel', quiz_bot.cancel),
             CommandHandler('start', quiz_bot.start),
+            MessageHandler(filters.Regex(re.compile(r"^(Отмена|Cancel)$", re.IGNORECASE)), quiz_bot.cancel),
+            MessageHandler(filters.Regex(re.compile(r"^(Начать|Start)$", re.IGNORECASE)), quiz_bot.start),
         ],
         name="main_conversation",
         persistent=True
@@ -493,7 +504,10 @@ async def main():
             ],
             ADMIN_CONFIRM_CLEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_confirm_clear)]
         },
-        fallbacks=[CommandHandler('cancel', quiz_bot.cancel)],
+        fallbacks=[
+            CommandHandler('cancel', quiz_bot.cancel),
+            MessageHandler(filters.Regex("^(Отмена|Cancel)$"), quiz_bot.cancel),
+        ],
         name="admin_conv",
         persistent=True
     )
