@@ -20,8 +20,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Состояния
-(CHOOSE_YEAR, QUESTION, HINT, ANSWER,
- ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(8)
+(CHOOSE_YEAR, CHOOSE_EXERCISE, QUESTION, HINT, ANSWER,
+ ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(9)
 
 # Папка для изображений
 IMAGE_DIR = "images"
@@ -43,19 +43,20 @@ class QuizBot:
                      (id INTEGER PRIMARY KEY AUTOINCREMENT, year INTEGER UNIQUE)''')
         c.execute('''CREATE TABLE IF NOT EXISTS topics
                      (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS questions
+        c.execute('''CREATE TABLE IF NOT EXISTS olympiads
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
                       year_id INTEGER,
+                      excercise INTEGER,
                       topic_id INTEGER,
-                      question_text TEXT,
-                      question_picture TEXT,
+                      task TEXT,
+                      task_picture TEXT,
                       hint TEXT,
                       hint_picture TEXT,
                       answer TEXT,
                       answer_picture TEXT,
                       FOREIGN KEY (year_id) REFERENCES years (id) ON DELETE CASCADE,
                       FOREIGN KEY (topic_id) REFERENCES topics (id) ON DELETE CASCADE,
-                      UNIQUE(year_id, topic_id, question_text, question_picture))''')
+                      UNIQUE(year_id, topic_id, task, task_picture))''')
         conn.commit()
         conn.close()
 
@@ -82,7 +83,7 @@ class QuizBot:
             headers = [cell.value for cell in sheet[1]]
             logger.info(f"Headers: {headers}")
 
-            required = ['Year', 'Topic', 'Question', 'Hint', 'Answer']
+            required = ['Year', 'Excercise', 'Topic', 'Task', 'Hint', 'Answer']
             for col in required:
                 if col not in headers:
                     raise ValueError(f"Missing column: {col}")
@@ -90,14 +91,14 @@ class QuizBot:
 
             # Optional picture columns
             pic_cols = {}
-            for col in ['Question_picture', 'Hint_picture', 'Answer_picture']:
+            for col in ['Task_picture', 'Hint_picture', 'Answer_picture']:
                 if col in headers:
                     pic_cols[col] = headers.index(col)
 
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
             if replace:
-                c.execute("DELETE FROM questions")
+                c.execute("DELETE FROM olympiads")
                 c.execute("DELETE FROM topics")
                 c.execute("DELETE FROM years")
                 logger.info("Cleared DB")
@@ -119,28 +120,38 @@ class QuizBot:
                     logger.warning(f"Invalid year in row {row_num}")
                     continue
 
-                topic = row[idx['Topic']]
-                question = row[idx['Question']]
-                hint = row[idx['Hint']]
-                answer = row[idx['Answer']]
+                try:
+                    excercise = int(float(row[idx['Excercise']]))
+                except (ValueError, TypeError):
+                    skipped += 1
+                    logger.warning(f"Invalid excercise in row {row_num}")
+                    continue
 
-                if not (year and topic and question and answer):
+                topic = row[idx['Topic']]
+                task = row[idx['Task']]
+                task_picture = row[idx['Task_picture']]
+                hint = row[idx['Hint']]
+                hint_picture = row[idx['Hint_picture']]
+                answer = row[idx['Answer']]
+                answer_picture = row[idx['Answer_picture']]
+
+                if not (year and excercise and topic and (task or task_picture) and (hint or hint_picture) and (answer or answer_picture)):
                     skipped += 1
                     logger.warning(f"Missing data in row {row_num}")
                     continue
 
                 topic = str(topic).strip()
-                question = str(question).strip()
+                task = str(task).strip()
                 hint = str(hint).strip() if hint else ""
                 answer = str(answer).strip()
 
                 # Get picture filenames
-                q_pic = str(row[pic_cols['Question_picture']]).strip() if 'Question_picture' in pic_cols and row[pic_cols['Question_picture']] else None
+                t_pic = str(row[pic_cols['Task_picture']]).strip() if 'Task_picture' in pic_cols and row[pic_cols['Task_picture']] else None
                 h_pic = str(row[pic_cols['Hint_picture']]).strip() if 'Hint_picture' in pic_cols and row[pic_cols['Hint_picture']] else None
                 a_pic = str(row[pic_cols['Answer_picture']]).strip() if 'Answer_picture' in pic_cols and row[pic_cols['Answer_picture']] else None
 
                 # Validate picture files exist
-                for pic in [q_pic, h_pic, a_pic]:
+                for pic in [t_pic, h_pic, a_pic]:
                     if pic and not os.path.exists(os.path.join(image_dir, pic)):
                         logger.warning(f"Picture file not found: {pic}")
                         # Optionally skip row or set to None
@@ -162,16 +173,16 @@ class QuizBot:
                 c.execute("SELECT id FROM topics WHERE name = ?", (topic,))
                 topic_id = c.fetchone()[0]
 
-                c.execute('''INSERT OR REPLACE INTO questions 
-                             (year_id, topic_id, question_text, question_picture, 
+                c.execute('''INSERT OR REPLACE INTO olympiads 
+                             (year_id, excercise, topic_id, task, task_picture, 
                               hint, hint_picture, answer, answer_picture)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                          (year_id, topic_id, question, q_pic, hint, h_pic, answer, a_pic))
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                          (year_id, excercise, topic_id, task, t_pic, hint, h_pic, answer, a_pic))
                 inserted += 1
 
             conn.commit()
             conn.close()
-            logger.info(f"Loaded: {inserted} questions, {len(inserted_topics)} topics, {len(inserted_years)} years, skipped: {skipped}")
+            logger.info(f"Loaded: {inserted} excercises, {len(inserted_topics)} topics, {len(inserted_years)} years, skipped: {skipped}")
             return True
 
         except Exception as e:
@@ -181,7 +192,7 @@ class QuizBot:
     def clear_database(self):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute("DELETE FROM questions")
+        c.execute("DELETE FROM olympiads")
         c.execute("DELETE FROM topics")
         c.execute("DELETE FROM years")
         conn.commit()
@@ -211,26 +222,63 @@ class QuizBot:
     def get_questions_for_year(self, year):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute('''SELECT q.id, q.question_text, q.question_picture,
-                            q.hint, q.hint_picture,
-                            q.answer, q.answer_picture
-                     FROM questions q
-                     JOIN years y ON q.year_id = y.id
+        c.execute('''SELECT o.id, o.excercise, o.task, o.task_picture,
+                            o.hint, o.hint_picture,
+                            o.answer, o.answer_picture
+                     FROM olympiads o
+                     JOIN years y ON o.year_id = y.id
                      WHERE y.year = ?''', (year,))
-        questions = []
+        tasks = []
         for r in c.fetchall():
-            questions.append({
+            tasks.append({
                 'id': r[0],
-                'text': r[1],
-                'q_pic': r[2],
-                'hint': r[3],
-                'h_pic': r[4],
-                'answer': r[5],
-                'a_pic': r[6]
+                'excercise': r[1],
+                'task': r[2],
+                't_pic': r[3],
+                'hint': r[4],
+                'h_pic': r[5],
+                'answer': r[6],
+                'a_pic': r[7]
             })
         conn.close()
-        return questions
+        return tasks
 
+    def get_exercises_for_year(self, year):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT o.excersise
+                     FROM olympiads o
+                     JOIN years y ON o.year_id = y.id
+                     WHERE y.year = ?
+                     ORDER BY o.excersise''', (year,))
+        exercises = [{'excersise': row[0]} for row in c.fetchall()]
+        conn.close()
+        return exercises   
+
+    def get_tasks_for_year_and_exercise(self, year, excersise):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT o.id, o.excersise, o.task, o.task_picture,
+                            o.hint, o.hint_picture,
+                            o.answer, o.answer_picture
+                     FROM olympiads o
+                     JOIN years y ON o.year_id = y.id
+                     WHERE y.year = ? AND o.excersise = ?''', (year, excersise))
+        tasks = []
+        for r in c.fetchall():
+            tasks.append({
+                'id': r[0],
+                'excercise': r[1],
+                'task': r[2],
+                't_pic': r[3],
+                'hint': r[4],
+                'h_pic': r[5],
+                'answer': r[6],
+                'a_pic': r[7]
+            })
+        conn.close()
+        return tasks
+    
     # === Handlers ===
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -264,29 +312,69 @@ class QuizBot:
             return CHOOSE_YEAR
 
         user_id = update.effective_user.id
-        questions = self.get_questions_for_year(year)
-        if not questions:
-            await update.message.reply_text("В этом году нет вопросов.")
+        exercises = self.get_exercises_for_year(year)
+        if not exercises:
+            await update.message.reply_text("В этом году нет заданий.")
             return CHOOSE_YEAR
+
+        # Формируем кнопки: "2011 задание 1", "2011 задание 2", ...
+        keyboard = [[f"{year} задание {ex['excersise']}"] for ex in exercises]
+        await update.message.reply_text(
+            f"Выберите задание для {year} года:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+        )
+
+        # Сохраняем год и список заданий
+        self.user_states[user_id] = {
+            'year': year,
+            'exercises': exercises,
+        }
+        return CHOOSE_EXERCISE
+
+    async def choose_exercise(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        state = self.user_states.get(user_id)
+        if not state:
+            await update.message.reply_text("Сначала выберите год.")
+            return CHOOSE_YEAR
+
+        year = state['year']
+        text = update.message.text
+
+        # Парсим "2011 задание 3" → excersise = 3
+        try:
+            if f"{year} задание " in text:
+                excersise = int(text.split()[-1])
+            else:
+                raise ValueError("Неверный формат")
+        except (ValueError, IndexError):
+            await update.message.reply_text("Пожалуйста, выберите задание из списка.")
+            return CHOOSE_EXERCISE
+
+        # Получаем задачу (первую, если их несколько с таким годом и номером)
+        tasks = self.get_tasks_for_year_and_exercise(year, excersise)
+        if not tasks:
+            await update.message.reply_text("Задание не найдено.")
+            return CHOOSE_EXERCISE
 
         self.user_states[user_id] = {
             'year': str(year),
-            'questions': questions,
+            'tasks': tasks,
             'index': 0
         }
 
-        await self._send_question(update, questions[0])
+        await self._send_task(update, tasks[0])
         return QUESTION
 
-    async def _send_question(self, update: Update, q):
-        if q['text']:
-            await update.message.reply_text(f"❓ {q['text']}")
-        if q['q_pic']:
-            pic_path = os.path.join(IMAGE_DIR, q['q_pic'])
+    async def _send_task(self, update: Update, q):
+        if q['task']:
+            await update.message.reply_text(f"❓ {q['task']}")
+        if q['t_pic']:
+            pic_path = os.path.join(IMAGE_DIR, q['t_pic'])
             if os.path.exists(pic_path):
                 await update.message.reply_photo(photo=pic_path)
             else:
-                await update.message.reply_text(f"🖼️ Изображение вопроса не найдено: {q['q_pic']}")
+                await update.message.reply_text(f"🖼️ Изображение задачи не найдено: {q['t_pic']}")
 
         await update.message.reply_text(
             "Команды:\n/hint — подсказка\n/answer — ответ\n/next — следующий",
@@ -296,11 +384,11 @@ class QuizBot:
     async def show_hint(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         state = self.user_states.get(user_id)
-        if not state or state['index'] >= len(state['questions']):
-            await update.message.reply_text("Нет активного вопроса.")
+        if not state or state['index'] >= len(state['tasks']):
+            await update.message.reply_text("Нет активной задачи.")
             return CHOOSE_YEAR
 
-        q = state['questions'][state['index']]
+        q = state['tasks'][state['index']]
         if q['hint']:
             await update.message.reply_text(f"💡 Подсказка: {q['hint']}")
         if q['h_pic']:
@@ -319,11 +407,11 @@ class QuizBot:
     async def show_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         state = self.user_states.get(user_id)
-        if not state or state['index'] >= len(state['questions']):
-            await update.message.reply_text("Нет активного вопроса.")
+        if not state or state['index'] >= len(state['tasks']):
+            await update.message.reply_text("Нет активной задачи.")
             return CHOOSE_YEAR
 
-        q = state['questions'][state['index']]
+        q = state['tasks'][state['index']]
         if q['answer']:
             await update.message.reply_text(f"✅ Ответ: {q['answer']}")
         if q['a_pic']:
@@ -334,7 +422,7 @@ class QuizBot:
                 await update.message.reply_text(f"🖼️ Изображение ответа не найдено: {q['a_pic']}")
 
         await update.message.reply_text(
-            "/next — следующий вопрос",
+            "/next — следующая задача",
             reply_markup=ReplyKeyboardMarkup([['Следующий']], one_time_keyboard=True)
         )
         return ANSWER
@@ -347,12 +435,12 @@ class QuizBot:
             return CHOOSE_YEAR
 
         state['index'] += 1
-        if state['index'] >= len(state['questions']):
+        if state['index'] >= len(state['tasks']):
             await update.message.reply_text("🎉 Вопросы закончились!")
             del self.user_states[user_id]
             return ConversationHandler.END
 
-        await self._send_question(update, state['questions'][state['index']])
+        await self._send_task(update, state['tasks'][state['index']])
         return QUESTION
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -476,6 +564,7 @@ async def main():
         entry_points=[CommandHandler('start', quiz_bot.start)],
         states={
             CHOOSE_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_year)],
+            CHOOSE_EXERCISE: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_exercise)],
             QUESTION: [
                 CommandHandler('hint', quiz_bot.show_hint),
                 CommandHandler('answer', quiz_bot.show_answer),
