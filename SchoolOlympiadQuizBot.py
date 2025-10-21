@@ -142,17 +142,16 @@ class QuizBot:
                     logger.warning(f"Missing data in row {row_num}")
                     continue
 
-                topic = str(topic).strip()
-                task = str(task).strip()
+                topic = str(topic).strip() if topic else ""
+                task = str(task).strip() if task else ""
                 hint = str(hint).strip() if hint else ""
-                answer = str(answer).strip()
+                answer = str(answer).strip() if answer else ""
 
                 # Validate picture files exist
                 for pic in [t_pic, h_pic, a_pic]:
                     if pic and not os.path.exists(os.path.join(image_dir, pic)):
                         logger.warning(f"Picture file not found: {pic}")
                         # Optionally skip row or set to None
-                        # Here we keep filename but it may fail later
 
                 c.execute("INSERT OR IGNORE INTO years (year) VALUES (?)", (year,))
                 if year not in inserted_years:
