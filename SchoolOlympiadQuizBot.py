@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Состояния
-(CHOOSE_YEAR, CHOOSE_EXERCISE, QUESTION, HINT, ANSWER,
+(CHOOSE_YEAR, CHOOSE_EXERCISE, TASK, HINT, ANSWER,
  ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(9)
 
 # Папка для изображений
@@ -216,7 +216,7 @@ class QuizBot:
         conn.close()
         return years
 
-    def get_questions_for_year(self, year):
+    def get_tasks_for_year(self, year):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         c.execute('''SELECT o.id, o.excercise, o.task, o.task_picture,
@@ -360,12 +360,12 @@ class QuizBot:
             'index': 0
         }
 
-        await self._send_task(update, tasks[0])
-        return QUESTION
+        await self.show_task(update, tasks[0])
+        return TASK
 
-    async def _send_task(self, update: Update, q):
+    async def show_task(self, update: Update, q):
         if q['task']:
-            await update.message.reply_text(f"❓ {q['task']}")
+            await update.message.reply_text(f"❓ Задача: {q['task'] or ''}")
         if q['t_pic']:
             pic_path = os.path.join(IMAGE_DIR, q['t_pic'])
             if os.path.exists(pic_path):
@@ -387,7 +387,7 @@ class QuizBot:
 
         q = state['tasks'][state['index']]
         if q['hint']:
-            await update.message.reply_text(f"💡 Подсказка: {q['hint']}")
+            await update.message.reply_text(f"💡 Подсказка: {q['hint'] or ''}")
         if q['h_pic']:
             pic_path = os.path.join(IMAGE_DIR, q['h_pic'])
             if os.path.exists(pic_path):
@@ -410,7 +410,7 @@ class QuizBot:
 
         q = state['tasks'][state['index']]
         if q['answer']:
-            await update.message.reply_text(f"✅ Ответ: {q['answer']}")
+            await update.message.reply_text(f"✅ Ответ: {q['answer'] or ''}")
         if q['a_pic']:
             pic_path = os.path.join(IMAGE_DIR, q['a_pic'])
             if os.path.exists(pic_path):
@@ -424,7 +424,7 @@ class QuizBot:
         )
         return ANSWER
 
-    async def next_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def next_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         state = self.user_states.get(user_id)
         if not state:
@@ -437,8 +437,8 @@ class QuizBot:
             del self.user_states[user_id]
             return ConversationHandler.END
 
-        await self._send_task(update, state['tasks'][state['index']])
-        return QUESTION
+        await self.show_task(update, state['tasks'][state['index']])
+        return TASK
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.user_states.pop(update.effective_user.id, None)
@@ -562,23 +562,23 @@ async def main():
         states={
             CHOOSE_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_year)],
             CHOOSE_EXERCISE: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_exercise)],
-            QUESTION: [
+            TASK: [
                 CommandHandler('hint', quiz_bot.show_hint),
                 CommandHandler('answer', quiz_bot.show_answer),
-                CommandHandler('next', quiz_bot.next_question),
+                CommandHandler('next', quiz_bot.next_task),
                 MessageHandler(filters.Regex(re.compile(r"^(Подсказка|Hint)$", re.IGNORECASE)), quiz_bot.show_hint),
                 MessageHandler(filters.Regex(re.compile(r"^(Ответ|Answer)$", re.IGNORECASE)), quiz_bot.show_answer),
-                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_question),
+                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_task),
             ],
             HINT: [
                 CommandHandler('answer', quiz_bot.show_answer),
-                CommandHandler('next', quiz_bot.next_question),
+                CommandHandler('next', quiz_bot.next_task),
                 MessageHandler(filters.Regex(re.compile(r"^(Ответ|Answer)$", re.IGNORECASE)), quiz_bot.show_answer),
-                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_question),
+                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_task),
             ],
             ANSWER: [
-                CommandHandler('next', quiz_bot.next_question),
-                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_question),
+                CommandHandler('next', quiz_bot.next_task),
+                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_task),
             ],
         },
         fallbacks=[
