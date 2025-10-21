@@ -129,13 +129,10 @@ class QuizBot:
 
                 topic = row[idx['Topic']]
                 task = row[idx['Task']]
-                task_picture = row[idx['Task_picture']]
                 hint = row[idx['Hint']]
-                hint_picture = row[idx['Hint_picture']]
                 answer = row[idx['Answer']]
-                answer_picture = row[idx['Answer_picture']]
-
-                if not (year and excercise and topic and (task or task_picture) and (hint or hint_picture) and (answer or answer_picture)):
+                
+                if not (year and excercise and topic and (task or t_pic) and (hint or h_pic) and (answer or a_pic)):
                     skipped += 1
                     logger.warning(f"Missing data in row {row_num}")
                     continue
