@@ -131,7 +131,12 @@ class QuizBot:
                 task = row[idx['Task']]
                 hint = row[idx['Hint']]
                 answer = row[idx['Answer']]
-                
+
+                # Get picture filenames
+                t_pic = str(row[pic_cols['Task_picture']]).strip() if 'Task_picture' in pic_cols and row[pic_cols['Task_picture']] else None
+                h_pic = str(row[pic_cols['Hint_picture']]).strip() if 'Hint_picture' in pic_cols and row[pic_cols['Hint_picture']] else None
+                a_pic = str(row[pic_cols['Answer_picture']]).strip() if 'Answer_picture' in pic_cols and row[pic_cols['Answer_picture']] else None
+
                 if not (year and excercise and topic and (task or t_pic) and (hint or h_pic) and (answer or a_pic)):
                     skipped += 1
                     logger.warning(f"Missing data in row {row_num}")
@@ -141,11 +146,6 @@ class QuizBot:
                 task = str(task).strip()
                 hint = str(hint).strip() if hint else ""
                 answer = str(answer).strip()
-
-                # Get picture filenames
-                t_pic = str(row[pic_cols['Task_picture']]).strip() if 'Task_picture' in pic_cols and row[pic_cols['Task_picture']] else None
-                h_pic = str(row[pic_cols['Hint_picture']]).strip() if 'Hint_picture' in pic_cols and row[pic_cols['Hint_picture']] else None
-                a_pic = str(row[pic_cols['Answer_picture']]).strip() if 'Answer_picture' in pic_cols and row[pic_cols['Answer_picture']] else None
 
                 # Validate picture files exist
                 for pic in [t_pic, h_pic, a_pic]:
