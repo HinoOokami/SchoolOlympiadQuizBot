@@ -246,24 +246,24 @@ class QuizBot:
     def get_exercises_for_year(self, year):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute('''SELECT o.excersise
+        c.execute('''SELECT o.excercise
                      FROM olympiads o
                      JOIN years y ON o.year_id = y.id
                      WHERE y.year = ?
-                     ORDER BY o.excersise''', (year,))
-        exercises = [{'excersise': row[0]} for row in c.fetchall()]
+                     ORDER BY o.excercise''', (year,))
+        exercises = [{'excercise': row[0]} for row in c.fetchall()]
         conn.close()
         return exercises   
 
-    def get_tasks_for_year_and_exercise(self, year, excersise):
+    def get_tasks_for_year_and_exercise(self, year, excercise):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute('''SELECT o.id, o.excersise, o.task, o.task_picture,
+        c.execute('''SELECT o.id, o.excercise, o.task, o.task_picture,
                             o.hint, o.hint_picture,
                             o.answer, o.answer_picture
                      FROM olympiads o
                      JOIN years y ON o.year_id = y.id
-                     WHERE y.year = ? AND o.excersise = ?''', (year, excersise))
+                     WHERE y.year = ? AND o.excercise = ?''', (year, excercise))
         tasks = []
         for r in c.fetchall():
             tasks.append({
@@ -318,7 +318,7 @@ class QuizBot:
             return CHOOSE_YEAR
 
         # Формируем кнопки: "2011 задание 1", "2011 задание 2", ...
-        keyboard = [[f"{year} задание {ex['excersise']}"] for ex in exercises]
+        keyboard = [[f"{year} задание {ex['excercise']}"] for ex in exercises]
         await update.message.reply_text(
             f"Выберите задание для {year} года:",
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
@@ -341,10 +341,10 @@ class QuizBot:
         year = state['year']
         text = update.message.text
 
-        # Парсим "2011 задание 3" → excersise = 3
+        # Парсим "2011 задание 3" → excercise = 3
         try:
             if f"{year} задание " in text:
-                excersise = int(text.split()[-1])
+                excercise = int(text.split()[-1])
             else:
                 raise ValueError("Неверный формат")
         except (ValueError, IndexError):
@@ -352,7 +352,7 @@ class QuizBot:
             return CHOOSE_EXERCISE
 
         # Получаем задачу (первую, если их несколько с таким годом и номером)
-        tasks = self.get_tasks_for_year_and_exercise(year, excersise)
+        tasks = self.get_tasks_for_year_and_exercise(year, excercise)
         if not tasks:
             await update.message.reply_text("Задание не найдено.")
             return CHOOSE_EXERCISE
