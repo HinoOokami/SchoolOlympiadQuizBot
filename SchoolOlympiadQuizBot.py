@@ -70,6 +70,11 @@ class QuizBot:
         conn.commit()
         conn.close()
 
+    def clean_value(val):
+        if val is None or str(val).strip().lower() == "none" or str(val).strip() == "":
+            return ""
+        return str(val).strip()
+
     def parse_excel_and_images(self, excel_path, image_dir, replace=True):
         try:
             logger.info(f"Parsing Excel: {excel_path}, replace={replace}")
@@ -142,10 +147,10 @@ class QuizBot:
                     logger.warning(f"Missing data in row {row_num}")
                     continue
 
-                topic = str(topic).strip() if topic else ""
-                task = str(task).strip() if task else ""
-                hint = str(hint).strip() if hint else ""
-                answer = str(answer).strip() if answer else ""
+                topic = clean_value(task)
+                task = clean_value(task)
+                hint = clean_value(hint)
+                answer = clean_value(answer)
 
                 # Validate picture files exist
                 for pic in [t_pic, h_pic, a_pic]:
