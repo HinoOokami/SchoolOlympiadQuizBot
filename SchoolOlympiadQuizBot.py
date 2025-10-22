@@ -70,6 +70,11 @@ class QuizBot:
         conn.commit()
         conn.close()
 
+    def _clean_value(self, val):
+        if val is None or str(val).strip().lower() == "none" or str(val).strip() == "":
+            return ""
+        return str(val).strip()
+    
     def parse_excel_and_images(self, excel_path, image_dir, replace=True):
         try:
             logger.info(f"Parsing Excel: {excel_path}, replace={replace}")
@@ -142,15 +147,10 @@ class QuizBot:
                     logger.warning(f"Missing data in row {row_num}")
                     continue
 
-                def clean_value(val):
-                    if val is None or str(val).strip().lower() == "none" or str(val).strip() == "":
-                        return ""
-                    return str(val).strip()
-                
-                topic = clean_value(task)
-                task = clean_value(task)
-                hint = clean_value(hint)
-                answer = clean_value(answer)
+                topic = self._clean_value(topic)
+                task = self._clean_value(task)
+                hint = self._clean_value(hint)
+                answer = self._clean_value(answer)
 
                 # Validate picture files exist
                 for pic in [t_pic, h_pic, a_pic]:
@@ -368,8 +368,9 @@ class QuizBot:
         return TASK
 
     async def show_task(self, update: Update, q):
-        if q['task']:
-            await update.message.reply_text(f"❓ Задача: {q['task'] or ''}")
+        task_text = q['task'] or ""
+        await update.message.reply_text(f"❓ Задача: {task_text}")
+        
         if q['t_pic']:
             pic_path = os.path.join(IMAGE_DIR, q['t_pic'])
             if os.path.exists(pic_path):
@@ -390,8 +391,9 @@ class QuizBot:
             return CHOOSE_YEAR
 
         q = state['tasks'][state['index']]
-        if q['hint']:
-            await update.message.reply_text(f"💡 Подсказка: {q['hint'] or ''}")
+        hint_text = q['hint'] or ""
+        await update.message.reply_text(f"💡 Подсказка: {hint_text}")
+        
         if q['h_pic']:
             pic_path = os.path.join(IMAGE_DIR, q['h_pic'])
             if os.path.exists(pic_path):
@@ -413,8 +415,9 @@ class QuizBot:
             return CHOOSE_YEAR
 
         q = state['tasks'][state['index']]
-        if q['answer']:
-            await update.message.reply_text(f"✅ Ответ: {q['answer'] or ''}")
+        answer_text = q['answer'] or ""
+        await update.message.reply_text(f"✅ Ответ: {answer_text}")
+        
         if q['a_pic']:
             pic_path = os.path.join(IMAGE_DIR, q['a_pic'])
             if os.path.exists(pic_path):
