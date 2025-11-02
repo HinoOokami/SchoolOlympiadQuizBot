@@ -363,7 +363,7 @@ class QuizBot:
     async def choose_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         if text == "Назад":
-            return await self.start(update, context)
+            return await self.start(update, context)  # ← ДОБАВЬТЕ ЭТУ СТРОКУ
         if text == "Начать":
             years = self.get_years_from_db()
             buttons = [str(year) for year in years]
@@ -436,24 +436,26 @@ class QuizBot:
 
         # Сохраняем полную информацию для "Задачи по теме"
         full_task = tasks[0]
-        topic = full_task.get('topic_name')  # но у нас нет topic_name в tasks!
-
-        # Исправление: получим тему отдельно
+        
+        # Получаем темы через таблицу связи
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute('''SELECT t.name FROM topics t
-                     JOIN olympiads o ON o.topic_id = t.id
+        c.execute('''SELECT t.name 
+                     FROM topics t
+                     JOIN olympiad_topics ot ON t.id = ot.topic_id
+                     JOIN olympiads o ON ot.olympiad_id = o.id
                      JOIN years y ON o.year_id = y.id
                      WHERE y.year = ? AND o.excercise = ?''', (year, excercise))
-        topic_row = c.fetchone()
-        topic = topic_row[0] if topic_row else "Без темы"
+        topics = [row[0] for row in c.fetchall()]
         conn.close()
+        topics_str = ", ".join(topics) if topics else "Без темы"
 
         self.user_states[user_id] = {
             'year': year,
             'exercises': state['exercises'],
             'current_task': full_task,
-            'current_topic': topic,
+            'current_topics': topics,        # список тем
+            'current_topic_str': topics_str  # для отображения
         }
 
         await self.show_task(update, full_task)
@@ -482,11 +484,11 @@ class QuizBot:
     async def show_hint(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         state = self.user_states.get(user_id)
-        if not state or state['index'] >= len(state['tasks']):
+        if not state or 'current_task' not in state:
             await update.message.reply_text("Нет активной задачи.")
             return CHOOSE_YEAR
 
-        q = state['tasks'][state['index']]
+        q = state['current_task']  # ← Берём напрямую
         hint_text = q['hint'] or ""
         await update.message.reply_text(f"💡 Подсказка: {hint_text}")
         
@@ -497,20 +499,21 @@ class QuizBot:
             else:
                 await update.message.reply_text(f"🖼️ Изображение подсказки не найдено: {q['h_pic']}")
 
+        keyboard = [['Ответ'], ['Задачи по теме', 'Назад']]
         await update.message.reply_text(
-            "Команды:\n/answer — ответ\n/next — следующий",
-            reply_markup=ReplyKeyboardMarkup([['Ответ', 'Следующий']], one_time_keyboard=True)
+            "Выберите действие:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
         )
         return HINT
 
     async def show_answer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         state = self.user_states.get(user_id)
-        if not state or state['index'] >= len(state['tasks']):
+        if not state or 'current_task' not in state:
             await update.message.reply_text("Нет активной задачи.")
             return CHOOSE_YEAR
 
-        q = state['tasks'][state['index']]
+        q = state['current_task']
         answer_text = q['answer'] or ""
         await update.message.reply_text(f"✅ Ответ: {answer_text}")
         
@@ -521,9 +524,10 @@ class QuizBot:
             else:
                 await update.message.reply_text(f"🖼️ Изображение ответа не найдено: {q['a_pic']}")
 
+        keyboard = [['Задачи по теме', 'Назад']]
         await update.message.reply_text(
-            "/next — следующая задача",
-            reply_markup=ReplyKeyboardMarkup([['Следующий']], one_time_keyboard=True)
+            "Выберите действие:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
         )
         return ANSWER
 
@@ -575,22 +579,6 @@ class QuizBot:
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
         )
         return CHOOSE_EXERCISE
-
-    async def next_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        state = self.user_states.get(user_id)
-        if not state:
-            await update.message.reply_text("Сначала выберите год.")
-            return CHOOSE_YEAR
-
-        state['index'] += 1
-        if state['index'] >= len(state['tasks']):
-            await update.message.reply_text("🎉 Вопросы закончились!")
-            del self.user_states[user_id]
-            return ConversationHandler.END
-
-        await self.show_task(update, state['tasks'][state['index']])
-        return TASK
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.user_states.pop(update.effective_user.id, None)
