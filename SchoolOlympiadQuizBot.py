@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 IMAGE_DIR = "images"
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
+def chunks(lst, n):
+    """Разбивает список на подсписки по n элементов."""
+    return [lst[i:i + n] for i in range(0, len(lst), n)]
 
 class QuizBot:
     def __init__(self, admin_ids):
@@ -293,7 +296,9 @@ class QuizBot:
             )
             return ConversationHandler.END
 
-        keyboard = [[str(year)] for year in years]
+        buttons = [str(year) for year in years]
+        keyboard = chunks(buttons, 4)  # ← 4 колонки
+
         await update.message.reply_text(
             f"Привет, {user.first_name}! Выберите год:",
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
@@ -319,7 +324,9 @@ class QuizBot:
             return CHOOSE_YEAR
 
         # Формируем кнопки: "2011 задание 1", "2011 задание 2", ...
-        keyboard = [[f"{year} задание {ex['excercise']}"] for ex in exercises]
+        buttons = [f"{year} задание {ex['excercise']}" for ex in exercises]
+        keyboard = chunks(buttons, 3)  # ← 3 колонки
+
         await update.message.reply_text(
             f"Выберите задание для {year} года:",
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
