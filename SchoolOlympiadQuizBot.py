@@ -20,8 +20,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Состояния
-(CHOOSE_YEAR, CHOOSE_EXERCISE, TASK, HINT, ANSWER,
- ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(9)
+(CHOOSE_YEAR, CHOOSE_EXERCISE, CHOOSE_TOPIC_EXERCISE, TASK, HINT, ANSWER,
+ ADMIN_MENU, ADMIN_UPLOAD_REPLACE, ADMIN_UPLOAD_APPEND, ADMIN_CONFIRM_CLEAR) = range(10)
 
 # Папка для изображений
 IMAGE_DIR = "images"
@@ -283,6 +283,19 @@ class QuizBot:
         conn.close()
         return tasks
     
+    def get_exercises_by_topic_and_year(self, year, topic):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT o.excercise
+                     FROM olympiads o
+                     JOIN years y ON o.year_id = y.id
+                     JOIN topics t ON o.topic_id = t.id
+                     WHERE y.year = ? AND t.name = ?
+                     ORDER BY o.excercise''', (year, topic))
+        exercises = [{'excercise': row[0]} for row in c.fetchall()]
+        conn.close()
+        return exercises
+    
     # === Handlers ===
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,20 +310,27 @@ class QuizBot:
             return ConversationHandler.END
 
         buttons = [str(year) for year in years]
-        keyboard = chunks(buttons, 4)  # ← 4 колонки
+        keyboard = chunks(buttons, 4)
+        keyboard.append(["Начать"])  # ← Кнопка Start
 
         await update.message.reply_text(
-            f"Привет, {user.first_name}! Выберите год:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+            f"Привет, {user.first_name}! Выберите год или нажмите «Начать»:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
         )
         return CHOOSE_YEAR
 
     async def choose_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = update.message.text
+        if text == "Назад":
+            return await self.start(update, context)
+
         try:
-            year = int(update.message.text)
+            year = int(text)
         except ValueError:
             years = self.get_years_from_db()
-            keyboard = [[str(y)] for y in years]
+            buttons = [str(y) for y in years]
+            keyboard = chunks(buttons, 4)
+            keyboard.append(["Назад"])
             await update.message.reply_text(
                 "Выберите год из списка.",
                 reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
@@ -323,16 +343,15 @@ class QuizBot:
             await update.message.reply_text("В этом году нет заданий.")
             return CHOOSE_YEAR
 
-        # Формируем кнопки: "2011 задание 1", "2011 задание 2", ...
         buttons = [f"{year} задание {ex['excercise']}" for ex in exercises]
-        keyboard = chunks(buttons, 3)  # ← 3 колонки
+        keyboard = chunks(buttons, 3)
+        keyboard.append(["Назад"])
 
         await update.message.reply_text(
             f"Выберите задание для {year} года:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
         )
 
-        # Сохраняем год и список заданий
         self.user_states[user_id] = {
             'year': year,
             'exercises': exercises,
@@ -343,13 +362,13 @@ class QuizBot:
         user_id = update.effective_user.id
         state = self.user_states.get(user_id)
         if not state:
-            await update.message.reply_text("Сначала выберите год.")
-            return CHOOSE_YEAR
+            return await self.start(update, context)
+
+        text = update.message.text
+        if text == "Назад":
+            return await self.choose_year(update, context)
 
         year = state['year']
-        text = update.message.text
-
-        # Парсим "2011 задание 3" → excercise = 3
         try:
             if f"{year} задание " in text:
                 excercise = int(text.split()[-1])
@@ -359,19 +378,34 @@ class QuizBot:
             await update.message.reply_text("Пожалуйста, выберите задание из списка.")
             return CHOOSE_EXERCISE
 
-        # Получаем задачу (первую, если их несколько с таким годом и номером)
         tasks = self.get_tasks_for_year_and_exercise(year, excercise)
         if not tasks:
             await update.message.reply_text("Задание не найдено.")
             return CHOOSE_EXERCISE
 
+        # Сохраняем полную информацию для "Задачи по теме"
+        full_task = tasks[0]
+        topic = full_task.get('topic_name')  # но у нас нет topic_name в tasks!
+
+        # Исправление: получим тему отдельно
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT t.name FROM topics t
+                     JOIN olympiads o ON o.topic_id = t.id
+                     JOIN years y ON o.year_id = y.id
+                     WHERE y.year = ? AND o.excercise = ?''', (year, excercise))
+        topic_row = c.fetchone()
+        topic = topic_row[0] if topic_row else "Без темы"
+        conn.close()
+
         self.user_states[user_id] = {
-            'year': str(year),
-            'tasks': tasks,
-            'index': 0
+            'year': year,
+            'exercises': state['exercises'],
+            'current_task': full_task,
+            'current_topic': topic,
         }
 
-        await self.show_task(update, tasks[0])
+        await self.show_task(update, full_task)
         return TASK
 
     async def show_task(self, update: Update, q):
@@ -385,9 +419,13 @@ class QuizBot:
             else:
                 await update.message.reply_text(f"🖼️ Изображение задачи не найдено: {q['t_pic']}")
 
+        keyboard = [
+            ['Подсказка', 'Ответ'],
+            ['Задачи по теме', 'Назад']
+        ]
         await update.message.reply_text(
-            "Команды:\n/hint — подсказка\n/answer — ответ\n/next — следующий",
-            reply_markup=ReplyKeyboardMarkup([['Подсказка', 'Ответ', 'Следующий']], one_time_keyboard=True)
+            "Выберите действие:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
         )
 
     async def show_hint(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -437,6 +475,37 @@ class QuizBot:
             reply_markup=ReplyKeyboardMarkup([['Следующий']], one_time_keyboard=True)
         )
         return ANSWER
+
+    async def show_topic_exercises(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        state = self.user_states.get(user_id)
+        if not state or 'current_topic' not in state:
+            return await self.start(update, context)
+
+        year = state['year']
+        topic = state['current_topic']
+        exercises = self.get_exercises_by_topic_and_year(year, topic)
+        if not exercises:
+            await update.message.reply_text("Нет других заданий по этой теме.")
+            return TASK
+
+        buttons = [f"{year} задание {ex['excercise']}" for ex in exercises]
+        keyboard = chunks(buttons, 3)
+        keyboard.append(["Назад"])
+
+        await update.message.reply_text(
+            f"Задания по теме «{topic}» в {year} году:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+        )
+        return CHOOSE_TOPIC_EXERCISE
+    
+    async def show_task_from_state(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        state = self.user_states.get(user_id)
+        if not state or 'current_task' not in state:
+            return await self.start(update, context)
+        await self.show_task(update, state['current_task'])
+        return TASK
 
     async def next_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -574,32 +643,37 @@ async def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', quiz_bot.start)],
         states={
-            CHOOSE_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_year)],
-            CHOOSE_EXERCISE: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_exercise)],
+            CHOOSE_YEAR: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_year)
+            ],
+            CHOOSE_EXERCISE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_exercise)
+            ],
+            CHOOSE_TOPIC_EXERCISE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_exercise)
+            ],
             TASK: [
                 CommandHandler('hint', quiz_bot.show_hint),
                 CommandHandler('answer', quiz_bot.show_answer),
-                CommandHandler('next', quiz_bot.next_task),
                 MessageHandler(filters.Regex(re.compile(r"^(Подсказка|Hint)$", re.IGNORECASE)), quiz_bot.show_hint),
                 MessageHandler(filters.Regex(re.compile(r"^(Ответ|Answer)$", re.IGNORECASE)), quiz_bot.show_answer),
-                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_task),
+                MessageHandler(filters.Regex("^(Задачи по теме)$"), quiz_bot.show_topic_exercises),
+                MessageHandler(filters.Regex("^(Назад)$"), quiz_bot.choose_year),
             ],
             HINT: [
                 CommandHandler('answer', quiz_bot.show_answer),
-                CommandHandler('next', quiz_bot.next_task),
                 MessageHandler(filters.Regex(re.compile(r"^(Ответ|Answer)$", re.IGNORECASE)), quiz_bot.show_answer),
-                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_task),
+                MessageHandler(filters.Regex("^(Назад)$"), quiz_bot.show_task_from_state),
             ],
             ANSWER: [
-                CommandHandler('next', quiz_bot.next_task),
-                MessageHandler(filters.Regex(re.compile(r"^(Следующий|Next)$", re.IGNORECASE)), quiz_bot.next_task),
+                MessageHandler(filters.Regex("^(Назад)$"), quiz_bot.show_task_from_state),
             ],
         },
         fallbacks=[
             CommandHandler('cancel', quiz_bot.cancel),
             CommandHandler('start', quiz_bot.start),
-            MessageHandler(filters.Regex(re.compile(r"^(Отмена|Cancel)$", re.IGNORECASE)), quiz_bot.cancel),
-            MessageHandler(filters.Regex(re.compile(r"^(Начать|Start)$", re.IGNORECASE)), quiz_bot.start),
+            MessageHandler(filters.Regex("^(Начать|Start)$"), quiz_bot.start),
+            MessageHandler(filters.Regex("^(Отмена|Cancel)$"), quiz_bot.cancel),
         ],
         name="main_conversation",
         persistent=True
