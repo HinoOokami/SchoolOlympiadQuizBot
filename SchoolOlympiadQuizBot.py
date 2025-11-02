@@ -50,7 +50,6 @@ class QuizBot:
                      (id INTEGER PRIMARY KEY AUTOINCREMENT,
                       year_id INTEGER,
                       excercise INTEGER,
-                      topic_id INTEGER,
                       task TEXT,
                       task_picture TEXT,
                       hint TEXT,
@@ -58,8 +57,15 @@ class QuizBot:
                       answer TEXT,
                       answer_picture TEXT,
                       FOREIGN KEY (year_id) REFERENCES years (id) ON DELETE CASCADE,
-                      FOREIGN KEY (topic_id) REFERENCES topics (id) ON DELETE CASCADE,
                       UNIQUE(year_id, excercise))''')
+        c.execute('''CREATE TABLE IF NOT EXISTS olympiad_topics
+                     (olympiad_id INTEGER,
+                      topic_id INTEGER,
+                      FOREIGN KEY (olympiad_id) REFERENCES olympiads (id) ON DELETE CASCADE,
+                      FOREIGN KEY (topic_id) REFERENCES topics (id) ON DELETE CASCADE,
+                      UNIQUE(olympiad_id, topic_id))''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_olympiad_topics_topic ON olympiad_topics(topic_id)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_olympiad_topics_olympiad ON olympiad_topics(olympiad_id)''')
         conn.commit()
         conn.close()
 
@@ -106,6 +112,7 @@ class QuizBot:
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
             if replace:
+                c.execute("DELETE FROM olympiad_topics")
                 c.execute("DELETE FROM olympiads")
                 c.execute("DELETE FROM topics")
                 c.execute("DELETE FROM years")
@@ -135,7 +142,7 @@ class QuizBot:
                     logger.warning(f"Invalid excercise in row {row_num}")
                     continue
 
-                topic = row[idx['Topic']]
+                topic_raw = row[idx['Topic']]
                 task = row[idx['Task']]
                 hint = row[idx['Hint']]
                 answer = row[idx['Answer']]
@@ -145,12 +152,18 @@ class QuizBot:
                 h_pic = str(row[pic_cols['Hint_picture']]).strip() if 'Hint_picture' in pic_cols and row[pic_cols['Hint_picture']] else None
                 a_pic = str(row[pic_cols['Answer_picture']]).strip() if 'Answer_picture' in pic_cols and row[pic_cols['Answer_picture']] else None
 
-                if not (year and excercise and topic and (task or t_pic) and (hint or h_pic) and (answer or a_pic)):
+                if not (year and excercise and topic_raw and (task or t_pic) and (hint or h_pic) and (answer or a_pic)):
                     skipped += 1
                     logger.warning(f"Missing data in row {row_num}")
                     continue
 
-                topic = self._clean_value(topic)
+                # Разбиваем темы по запятой
+                topics_list = [t.strip() for t in str(topic_raw).split(',') if t.strip()]
+                if not topics_list:
+                    skipped += 1
+                    logger.warning(f"No valid topics in row {row_num}")
+                    continue
+
                 task = self._clean_value(task)
                 hint = self._clean_value(hint)
                 answer = self._clean_value(answer)
@@ -159,34 +172,45 @@ class QuizBot:
                 for pic in [t_pic, h_pic, a_pic]:
                     if pic and not os.path.exists(os.path.join(image_dir, pic)):
                         logger.warning(f"Picture file not found: {pic}")
-                        # Optionally skip row or set to None
 
+                # Вставляем год
                 c.execute("INSERT OR IGNORE INTO years (year) VALUES (?)", (year,))
                 if year not in inserted_years:
                     inserted_years.add(year)
                     logger.info(f"Added year: {year}")
 
-                c.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic,))
-                if topic not in inserted_topics:
-                    inserted_topics.add(topic)
-                    logger.info(f"Added topic: {topic}")
-
                 c.execute("SELECT id FROM years WHERE year = ?", (year,))
                 year_id = c.fetchone()[0]
 
-                c.execute("SELECT id FROM topics WHERE name = ?", (topic,))
-                topic_id = c.fetchone()[0]
+                # Вставляем темы
+                for topic_name in topics_list:
+                    c.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic_name,))
+                    if topic_name not in inserted_topics:
+                        inserted_topics.add(topic_name)
+                        logger.info(f"Added topic: {topic_name}")
 
+                # Вставляем задание
                 c.execute('''INSERT OR REPLACE INTO olympiads 
-                             (year_id, excercise, topic_id, task, task_picture, 
+                             (year_id, excercise, task, task_picture, 
                               hint, hint_picture, answer, answer_picture)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                          (year_id, excercise, topic_id, task, t_pic, hint, h_pic, answer, a_pic))
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                          (year_id, excercise, task, t_pic, hint, h_pic, answer, a_pic))
+                
+                olympiad_id = c.lastrowid
+
+                # Связываем с темами
+                for topic_name in topics_list:
+                    c.execute("SELECT id FROM topics WHERE name = ?", (topic_name,))
+                    topic_id = c.fetchone()[0]
+                    c.execute('''INSERT OR IGNORE INTO olympiad_topics 
+                                 (olympiad_id, topic_id) VALUES (?, ?)''',
+                              (olympiad_id, topic_id))
+
                 inserted += 1
 
             conn.commit()
             conn.close()
-            logger.info(f"Loaded: {inserted} excercises, {len(inserted_topics)} topics, {len(inserted_years)} years, skipped: {skipped}")
+            logger.info(f"Loaded: {inserted} exercises, {len(inserted_topics)} topics, {len(inserted_years)} years, skipped: {skipped}")
             return True
 
         except Exception as e:
@@ -268,30 +292,50 @@ class QuizBot:
                      FROM olympiads o
                      JOIN years y ON o.year_id = y.id
                      WHERE y.year = ? AND o.excercise = ?''', (year, excercise))
-        tasks = []
-        for r in c.fetchall():
-            tasks.append({
-                'id': r[0],
-                'excercise': r[1],
-                'task': r[2],
-                't_pic': r[3],
-                'hint': r[4],
-                'h_pic': r[5],
-                'answer': r[6],
-                'a_pic': r[7]
-            })
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return []
+        
+        task = {
+            'id': row[0],
+            'excercise': row[1],
+            'task': row[2],
+            't_pic': row[3],
+            'hint': row[4],
+            'h_pic': row[5],
+            'answer': row[6],
+            'a_pic': row[7]
+        }
+        
+        # Получаем темы задания
+        c.execute('''SELECT t.name 
+                     FROM topics t
+                     JOIN olympiad_topics ot ON t.id = ot.topic_id
+                     WHERE ot.olympiad_id = ?''', (task['id'],))
+        topics = [r[0] for r in c.fetchall()]
+        task['topics'] = topics
+        
         conn.close()
-        return tasks
+        return [task]
     
-    def get_exercises_by_topic_and_year(self, year, topic):
+    def get_exercises_by_topics_and_year(self, year, topic_list):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute('''SELECT o.excercise
-                     FROM olympiads o
-                     JOIN years y ON o.year_id = y.id
-                     JOIN topics t ON o.topic_id = t.id
-                     WHERE y.year = ? AND t.name = ?
-                     ORDER BY o.excercise''', (year, topic))
+        
+        # Создаём placeholder'ы для тем
+        placeholders = ','.join('?' * len(topic_list))
+        query = f'''
+            SELECT DISTINCT o.excercise
+            FROM olympiads o
+            JOIN years y ON o.year_id = y.id
+            JOIN olympiad_topics ot ON o.id = ot.olympiad_id
+            JOIN topics t ON ot.topic_id = t.id
+            WHERE y.year = ? AND t.name IN ({placeholders})
+            ORDER BY o.excercise
+        '''
+        params = [year] + topic_list
+        c.execute(query, params)
         exercises = [{'excercise': row[0]} for row in c.fetchall()]
         conn.close()
         return exercises
@@ -486,14 +530,14 @@ class QuizBot:
     async def show_topic_exercises(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         state = self.user_states.get(user_id)
-        if not state or 'current_topic' not in state:
+        if not state or 'current_topics' not in state:
             return await self.start(update, context)
 
         year = state['year']
-        topic = state['current_topic']
-        exercises = self.get_exercises_by_topic_and_year(year, topic)
+        topics = state['current_topics']
+        exercises = self.get_exercises_by_topics_and_year(year, topics)
         if not exercises:
-            await update.message.reply_text("Нет других заданий по этой теме.")
+            await update.message.reply_text("Нет других заданий по этим темам.")
             return TASK
 
         buttons = [f"{year} задание {ex['excercise']}" for ex in exercises]
@@ -501,7 +545,7 @@ class QuizBot:
         keyboard.append(["Назад"])
 
         await update.message.reply_text(
-            f"Задания по теме «{topic}» в {year} году:",
+            f"Задания по темам {', '.join(topics)} в {year} году:",
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
         )
         return CHOOSE_TOPIC_EXERCISE
