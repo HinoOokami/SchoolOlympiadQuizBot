@@ -59,7 +59,7 @@ class QuizBot:
                       answer_picture TEXT,
                       FOREIGN KEY (year_id) REFERENCES years (id) ON DELETE CASCADE,
                       FOREIGN KEY (topic_id) REFERENCES topics (id) ON DELETE CASCADE,
-                      UNIQUE(year_id, topic_id, task, task_picture))''')
+                      UNIQUE(year_id, excercise))''')
         conn.commit()
         conn.close()
 
@@ -309,13 +309,10 @@ class QuizBot:
             )
             return ConversationHandler.END
 
-        buttons = [str(year) for year in years]
-        keyboard = chunks(buttons, 4)
-        keyboard.append(["Начать"])  # ← Кнопка Start
-
+        # Отправляем приветствие БЕЗ клавиатуры
         await update.message.reply_text(
-            f"Привет, {user.first_name}! Выберите год или нажмите «Начать»:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False, resize_keyboard=True)
+            f"Привет, {user.first_name}! Нажмите «Начать», чтобы выбрать год.",
+            reply_markup=ReplyKeyboardMarkup([["Начать"]], resize_keyboard=True)
         )
         return CHOOSE_YEAR
 
@@ -323,6 +320,16 @@ class QuizBot:
         text = update.message.text
         if text == "Назад":
             return await self.start(update, context)
+        if text == "Начать":
+            years = self.get_years_from_db()
+            buttons = [str(year) for year in years]
+            keyboard = chunks(buttons, 4)
+            keyboard.append(["Назад"])  # Только "Назад", без "Начать"
+            await update.message.reply_text(
+                "Выберите год:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+            )
+            return CHOOSE_YEAR
 
         try:
             year = int(text)
@@ -506,6 +513,24 @@ class QuizBot:
             return await self.start(update, context)
         await self.show_task(update, state['current_task'])
         return TASK
+    
+    async def back_to_exercises(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        state = self.user_states.get(user_id)
+        if not state or 'year' not in state or 'exercises' not in state:
+            return await self.start(update, context)
+
+        year = state['year']
+        exercises = state['exercises']
+        buttons = [f"{year} задание {ex['excercise']}" for ex in exercises]
+        keyboard = chunks(buttons, 3)
+        keyboard.append(["Назад"])
+
+        await update.message.reply_text(
+            f"Выберите задание для {year} года:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
+        )
+        return CHOOSE_EXERCISE
 
     async def next_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -658,7 +683,7 @@ async def main():
                 MessageHandler(filters.Regex(re.compile(r"^(Подсказка|Hint)$", re.IGNORECASE)), quiz_bot.show_hint),
                 MessageHandler(filters.Regex(re.compile(r"^(Ответ|Answer)$", re.IGNORECASE)), quiz_bot.show_answer),
                 MessageHandler(filters.Regex("^(Задачи по теме)$"), quiz_bot.show_topic_exercises),
-                MessageHandler(filters.Regex("^(Назад)$"), quiz_bot.choose_year),
+                MessageHandler(filters.Regex("^(Назад)$"), quiz_bot.back_to_exercises),
             ],
             HINT: [
                 CommandHandler('answer', quiz_bot.show_answer),
