@@ -589,7 +589,7 @@ class QuizBot:
 
         keyboard = [
             ['📁 Загрузить данные', '📥 Дополнить данные'],
-            ['🧹 Очистить базу', '↩️ Выйти']
+            ['🧹 Удалить данные', '↩️ Выйти']
         ]
         await update.message.reply_text(
             "🛡️ Админ-панель:\n"
@@ -616,8 +616,8 @@ class QuizBot:
         elif choice == "📥 Дополнить данные":
             await update.message.reply_text("Отправьте ZIP-архив с Excel и изображениями для дополнения.")
             return ADMIN_UPLOAD_APPEND
-        elif choice == "🧹 Очистить базу":
-            await update.message.reply_text("Точно очистить?", reply_markup=ReplyKeyboardMarkup([['✅ Да', '❌ Нет']]))
+        elif choice == "🧹 Удалить данные":
+            await update.message.reply_text("Точно удалить все данные?", reply_markup=ReplyKeyboardMarkup([['✅ Да', '❌ Нет']]))
             return ADMIN_CONFIRM_CLEAR
         else:
             await update.message.reply_text("Выберите действие из меню.")
@@ -668,10 +668,10 @@ class QuizBot:
         if update.message.text == "✅ Да":
             self.clear_database()
             self.clear_images()
-            await update.message.reply_text("🧹 Данные очищены.", reply_markup=ReplyKeyboardRemove())
+            await update.message.reply_text("🧹 Все данные удалены.", reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
         else:
-            await update.message.reply_text("Очистка отменена.", reply_markup=ReplyKeyboardRemove())
+            await update.message.reply_text("Удаление отменено.", reply_markup=ReplyKeyboardRemove())
             return ADMIN_MENU
 
 
