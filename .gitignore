@@ -140,7 +140,7 @@ conversation_states.pkl
 quiz_bot.db
 
 # Quiz files
-/images
+images/
 
 # Replit files
 .pythonlibs/

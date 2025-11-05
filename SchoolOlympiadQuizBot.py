@@ -226,26 +226,32 @@ class QuizBot:
             return False
 
     def clear_database(self):
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        c.execute("DELETE FROM olympiads")
-        c.execute("DELETE FROM topics")
-        c.execute("DELETE FROM years")
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("DELETE FROM olympiads")
+            c.execute("DELETE FROM topics")
+            c.execute("DELETE FROM years")
+            conn.commit()
+            conn.close()
+            logger.info("Database cleared successfully.")
+        except Exception as e:
+            logger.error(f"Error clearing database: {e}")
 
     def clear_images(self):
-        # Удаляем все файлы изображений
-        if os.path.exists(IMAGE_DIR):
-            for filename in os.listdir(IMAGE_DIR):
-                file_path = os.path.join(IMAGE_DIR, filename)
-                try:
-                    if os.path.isfile(file_path):
-                        os.unlink(file_path)
-                        logger.info(f"Deleted image file: {filename}")
-                except Exception as e:
-                    logger.error(f"Failed to delete {file_path}: {e}")
-        logger.info("All image files deleted.")
+        try:
+            if os.path.exists(IMAGE_DIR):
+                for filename in os.listdir(IMAGE_DIR):
+                    file_path = os.path.join(IMAGE_DIR, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.unlink(file_path)
+                            logger.info(f"Deleted image file: {filename}")
+                    except Exception as e:
+                        logger.error(f"Failed to delete {file_path}: {e}")
+            logger.info("All image files deleted.")
+        except Exception as e:
+            logger.error(f"Error in clear_images: {e}")
 
     def get_years_from_db(self):
         conn = sqlite3.connect(self.db_path)
@@ -676,7 +682,17 @@ class QuizBot:
         if update.message.text == "✅ Да":
             self.clear_database()
             self.clear_images()
-            await update.message.reply_text("🧹 Все данные удалены.", reply_markup=ReplyKeyboardRemove())
+            
+            # Проверка
+            years = self.get_years_from_db()
+            images_count = len(os.listdir(IMAGE_DIR)) if os.path.exists(IMAGE_DIR) else 0
+            
+            await update.message.reply_text(
+                f"🧹 Все данные удалены.\n"
+                f"Осталось лет в БД: {len(years)}\n"
+                f"Осталось изображений: {images_count}",
+                reply_markup=ReplyKeyboardRemove()
+            )
             return ConversationHandler.END
         else:
             await update.message.reply_text("Удаление отменено.", reply_markup=ReplyKeyboardRemove())
