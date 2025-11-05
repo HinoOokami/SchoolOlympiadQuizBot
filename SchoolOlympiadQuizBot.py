@@ -10,7 +10,6 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, filters, PicklePersistence
 )
 import openpyxl
-import re
 
 # Тексты кнопок
 BTN_START = "Начать"
