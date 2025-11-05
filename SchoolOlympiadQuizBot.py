@@ -331,15 +331,23 @@ class QuizBot:
         self.save_user_to_db(user)
         years = self.get_years_from_db()
         if not years:
+            #await update.message.reply_text(
+            #    f"Привет, {user.first_name}! Я бот для викторин.\n\n"
+            #    "Нет доступных годов. Обратитесь к админу."
+            #)
             await update.message.reply_text(
-                f"Привет, {user.first_name}! Я бот для викторин.\n\n"
+                f"Привет! Я бот для викторин.\n\n"
                 "Нет доступных годов. Обратитесь к админу."
             )
             return ConversationHandler.END
 
         # Отправляем приветствие БЕЗ клавиатуры
+        #await update.message.reply_text(
+        #    f"Привет, {user.first_name}! Нажмите «{BTN_START}», чтобы выбрать год.",
+        #    reply_markup=ReplyKeyboardMarkup([[BTN_START]], resize_keyboard=True)
+        #)
         await update.message.reply_text(
-            f"Привет, {user.first_name}! Нажмите «{BTN_START}», чтобы выбрать год.",
+            f"Привет! Нажмите «{BTN_START}», чтобы выбрать год.",
             reply_markup=ReplyKeyboardMarkup([[BTN_START]], resize_keyboard=True)
         )
         return CHOOSE_YEAR
