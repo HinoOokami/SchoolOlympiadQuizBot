@@ -351,9 +351,14 @@ class QuizBot:
         #    f"Привет, {user.first_name}! Нажмите «{BTN_START}», чтобы выбрать год.",
         #    reply_markup=ReplyKeyboardMarkup([[BTN_START]], resize_keyboard=True)
         #)
+
+        keyboard = [[BTN_START]]
+        if user.id in self.admin_ids:
+            keyboard.append(["🛡️ Админка"])  # Кнопка для администраторов
+
         await update.message.reply_text(
             f"Привет! Нажмите «{BTN_START}», чтобы выбрать год.",
-            reply_markup=ReplyKeyboardMarkup([[BTN_START]], resize_keyboard=True)
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
         return CHOOSE_YEAR
 
@@ -596,8 +601,10 @@ class QuizBot:
 
     async def admin_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
+        logger.info(f"Попытка доступа к админке от пользователя ID={user_id}, админы={self.admin_ids}")
+        
         if user_id not in self.admin_ids:
-            await update.message.reply_text("❌ Доступ запрещён.")
+            await update.message.reply_text(f"❌ Доступ запрещён. Ваш ID: {user_id}")
             return ConversationHandler.END
 
         keyboard = [
@@ -705,11 +712,15 @@ async def main():
     if not TOKEN:
         raise ValueError("BOT_TOKEN не задан!")
 
-    admin_ids_str = os.getenv("ADMIN_IDS", "")
+    admin_ids_str = os.getenv("ADMIN_IDS", "").strip()
+    if not admin_ids_str:
+        raise ValueError("ADMIN_IDS не задан! Укажите ID администраторов через запятую")
+    
     admin_ids = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip().isdigit()]
     if not admin_ids:
-        logger.warning("ADMIN_IDS не задан")
-
+        raise ValueError("ADMIN_IDS содержит некорректные ID")
+    
+    logger.info(f"Администраторы: {admin_ids}")
     quiz_bot = QuizBot(admin_ids=admin_ids)
     persistence = PicklePersistence(filepath="conversation_states.pkl")
     app = Application.builder().token(TOKEN).persistence(persistence).build()
@@ -719,6 +730,7 @@ async def main():
         states={
             CHOOSE_YEAR: [
                 MessageHandler(filters.Text([BTN_START, BTN_BACK_TO_YEAR]), quiz_bot.choose_year),
+                MessageHandler(filters.Text(["🛡️ Админка"]), quiz_bot.admin_start),  # Новая строка
                 MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_year)
             ],
             CHOOSE_EXERCISE: [
@@ -758,7 +770,10 @@ async def main():
     )
 
     admin_handler = ConversationHandler(
-        entry_points=[CommandHandler('admin', quiz_bot.admin_start)],
+        entry_points=[
+            CommandHandler('admin', quiz_bot.admin_start),
+            MessageHandler(filters.Text(["🛡️ Админка"]), quiz_bot.admin_start)  # Дублирующий обработчик
+        ],
         states={
             ADMIN_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_menu)],
             ADMIN_UPLOAD_REPLACE: [
@@ -776,7 +791,8 @@ async def main():
             MessageHandler(filters.Text(["Отмена", "Cancel"]), quiz_bot.cancel),
         ],
         name="admin_conv",
-        persistent=True
+        persistent=True,
+        allow_reentry=True  # ✅ Ключевое исправление!
     )
 
     app.add_handler(conv_handler)
