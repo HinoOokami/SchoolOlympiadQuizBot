@@ -272,20 +272,21 @@ class QuizBot:
         conn.close()
         return exercises   
 
-    def get_all_exercises_by_topics(self, topic_list):
-        """Возвращает все задания по указанным темам из всех годов"""
+    def get_all_exercises_by_topics_with_matching_topics(self, topic_list):
+        """Возвращает все задания по указанным темам из всех годов с информацией о совпадающих темах"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         
         # Создаём placeholder'ы для тем
         placeholders = ','.join('?' * len(topic_list))
         query = f'''
-            SELECT DISTINCT y.year, o.excercise
+            SELECT DISTINCT y.year, o.excercise, GROUP_CONCAT(t.name, ', ') as matching_topics
             FROM olympiads o
             JOIN years y ON o.year_id = y.id
             JOIN olympiad_topics ot ON o.id = ot.olympiad_id
             JOIN topics t ON ot.topic_id = t.id
             WHERE t.name IN ({placeholders})
+            GROUP BY y.year, o.excercise
             ORDER BY y.year, o.excercise
         '''
         c.execute(query, topic_list)
@@ -293,7 +294,8 @@ class QuizBot:
         for row in c.fetchall():
             results.append({
                 'year': row[0],
-                'excercise': row[1]
+                'excercise': row[1],
+                'matching_topics': row[2]  # Все совпадающие темы для этого задания
             })
         conn.close()
         return results
@@ -487,9 +489,12 @@ class QuizBot:
 
         text = update.message.text
 
-        # Парсим год и номер задания из текста вида "2023 задание 5"
+        # Парсим год и номер задания из текста вида "2023 задание 5 (Алгебра, Геометрия)"
+        # Извлекаем основную информацию, игнорируя темы в скобках
         try:
-            parts = text.split()
+            # Сначала удаляем часть в скобках, если она есть
+            clean_text = text.split(' (')[0]
+            parts = clean_text.split()
             if len(parts) >= 3 and parts[1] == "задание":
                 year = int(parts[0])
                 excercise = int(parts[2])
@@ -614,15 +619,18 @@ class QuizBot:
             return await self.start(update, context)
 
         topics = state['current_topics']
-        # Теперь ищем по всем годам, а не только по текущему году
-        exercises = self.get_all_exercises_by_topics(topics)
-        if not exercises:
+        exercises_data = self.get_all_exercises_by_topics_with_matching_topics(topics)
+        if not exercises_data:
             await update.message.reply_text("Нет других заданий по этим темам.")
             return await self.show_task_from_state(update, context)
 
-        # Формируем кнопки с указанием года
-        buttons = [f"{ex['year']} задание {ex['excercise']}" for ex in exercises]
-        keyboard = chunks(buttons, 3)
+        # Формируем кнопки с указанием года и совпадающих тем
+        buttons = []
+        for data in exercises_data:
+            button_text = f"{data['year']} задание {data['excercise']} ({data['matching_topics']})"
+            buttons.append(button_text)
+
+        keyboard = chunks(buttons, 2)
         keyboard.append([BTN_BACK_TO_EXERCISES, BTN_BACK_TO_YEAR])
 
         await update.message.reply_text(
