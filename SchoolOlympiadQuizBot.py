@@ -335,31 +335,23 @@ class QuizBot:
         user = update.effective_user
         self.save_user_to_db(user)
         years = self.get_years_from_db()
-        if not years:
-            #await update.message.reply_text(
-            #    f"Привет, {user.first_name}! Я бот для викторин.\n\n"
-            #    "Нет доступных годов. Обратитесь к админу."
-            #)
-            await update.message.reply_text(
-                f"Привет! Я бот для викторин.\n\n"
-                "Нет доступных годов. Обратитесь к админу."
-            )
-            return ConversationHandler.END
-
-        # Отправляем приветствие БЕЗ клавиатуры
-        #await update.message.reply_text(
-        #    f"Привет, {user.first_name}! Нажмите «{BTN_START}», чтобы выбрать год.",
-        #    reply_markup=ReplyKeyboardMarkup([[BTN_START]], resize_keyboard=True)
-        #)
-
+        
         keyboard = [[BTN_START]]
         if user.id in self.admin_ids:
-            keyboard.append(["🛡️ Админка"])  # Кнопка для администраторов
+            keyboard.append(["🛡️ Админка"])  # Кнопка админки всегда доступна для админов
 
         await update.message.reply_text(
             f"Привет! Нажмите «{BTN_START}», чтобы выбрать год.",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
+        
+        # Проверяем годы ТОЛЬКО если пользователь не админ
+        if not years and user.id not in self.admin_ids:
+            await update.message.reply_text(
+                "Нет доступных годов. Обратитесь к админу."
+            )
+            return ConversationHandler.END
+        
         return CHOOSE_YEAR
 
     async def choose_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -558,7 +550,7 @@ class QuizBot:
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
         )
         return CHOOSE_TOPIC_EXERCISE
-    
+
     async def show_task_from_state(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         state = self.user_states.get(user_id)
@@ -566,7 +558,7 @@ class QuizBot:
             return await self.start(update, context)
         await self.show_task(update, state['current_task'])
         return TASK
-    
+
     async def back_to_year_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Возвращает к выбору года"""
         user_id = update.effective_user.id
@@ -607,6 +599,21 @@ class QuizBot:
             await update.message.reply_text(f"❌ Доступ запрещён. Ваш ID: {user_id}")
             return ConversationHandler.END
 
+        keyboard = [
+            ['📁 Загрузить данные', '📥 Дополнить данные'],
+            ['🧹 Удалить данные', '↩️ Выйти']
+        ]
+        await update.message.reply_text(
+            "🛡️ Админ-панель:\n"
+            "• 📁 — заменить все данные\n"
+            "• 📥 — добавить к существующим\n"
+            "• 🧹 — удалить всё",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return ADMIN_MENU
+
+    async def admin_menu_template(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Вспомогательный метод для возврата в главное меню админки"""
         keyboard = [
             ['📁 Загрузить данные', '📥 Дополнить данные'],
             ['🧹 Удалить данные', '↩️ Выйти']
@@ -678,10 +685,11 @@ class QuizBot:
             success = self.parse_excel_and_images(excel_path, tmp_dir, replace=replace)
 
         if success:
-            await update.message.reply_text("✅ Данные успешно загружены!", reply_markup=ReplyKeyboardRemove())
-            return ConversationHandler.END
+            await update.message.reply_text("✅ Данные успешно загружены!")
+            # Возвращаемся в главное меню админки, а не завершаем диалог
+            return await self.admin_menu_template(update, context)
         else:
-            await update.message.reply_text("❌ Ошибка при загрузке данных.", reply_markup=ReplyKeyboardMarkup([['↩️ Отмена']]))
+            await update.message.reply_text("❌ Ошибка при загрузке данных.")
             return ADMIN_UPLOAD_REPLACE if replace else ADMIN_UPLOAD_APPEND
 
     async def admin_confirm_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -696,13 +704,13 @@ class QuizBot:
             await update.message.reply_text(
                 f"🧹 Все данные удалены.\n"
                 f"Осталось лет в БД: {len(years)}\n"
-                f"Осталось изображений: {images_count}",
-                reply_markup=ReplyKeyboardRemove()
+                f"Осталось изображений: {images_count}"
             )
-            return ConversationHandler.END
+            # Возвращаемся в главное меню админки
+            return await self.admin_menu_template(update, context)
         else:
-            await update.message.reply_text("Удаление отменено.", reply_markup=ReplyKeyboardRemove())
-            return ADMIN_MENU
+            await update.message.reply_text("Удаление отменено.")
+            return await self.admin_menu_template(update, context)
 
 
 # === Main ===
@@ -778,7 +786,7 @@ async def main():
             ADMIN_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_menu)],
             ADMIN_UPLOAD_REPLACE: [
                 MessageHandler(filters.Document.ZIP, quiz_bot.admin_upload_file),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.admin_upload_file)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: quiz_bot.admin_upload_file(u, c, replace=True))
             ],
             ADMIN_UPLOAD_APPEND: [
                 MessageHandler(filters.Document.ZIP, lambda u, c: quiz_bot.admin_upload_file(u, c, replace=False)),
