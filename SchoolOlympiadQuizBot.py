@@ -272,6 +272,32 @@ class QuizBot:
         conn.close()
         return exercises   
 
+    def get_all_exercises_by_topics(self, topic_list):
+        """Возвращает все задания по указанным темам из всех годов"""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        
+        # Создаём placeholder'ы для тем
+        placeholders = ','.join('?' * len(topic_list))
+        query = f'''
+            SELECT DISTINCT y.year, o.excercise
+            FROM olympiads o
+            JOIN years y ON o.year_id = y.id
+            JOIN olympiad_topics ot ON o.id = ot.olympiad_id
+            JOIN topics t ON ot.topic_id = t.id
+            WHERE t.name IN ({placeholders})
+            ORDER BY y.year, o.excercise
+        '''
+        c.execute(query, topic_list)
+        results = []
+        for row in c.fetchall():
+            results.append({
+                'year': row[0],
+                'excercise': row[1]
+            })
+        conn.close()
+        return results
+
     def get_tasks_for_year_and_exercise(self, year, excercise):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
@@ -453,6 +479,59 @@ class QuizBot:
         await self.show_task(update, full_task)
         return TASK
 
+    async def choose_topic_exercise(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        state = self.user_states.get(user_id)
+        if not state:
+            return await self.start(update, context)
+
+        text = update.message.text
+
+        # Парсим год и номер задания из текста вида "2023 задание 5"
+        try:
+            parts = text.split()
+            if len(parts) >= 3 and parts[1] == "задание":
+                year = int(parts[0])
+                excercise = int(parts[2])
+            else:
+                raise ValueError("Неверный формат")
+        except (ValueError, IndexError):
+            await update.message.reply_text("Пожалуйста, выберите задание из списка.")
+            return CHOOSE_TOPIC_EXERCISE
+
+        # Получаем задачу по году и номеру задания
+        tasks = self.get_tasks_for_year_and_exercise(year, excercise)
+        if not tasks:
+            await update.message.reply_text("Задание не найдено.")
+            return CHOOSE_TOPIC_EXERCISE
+
+        # Обновляем состояние пользователя
+        full_task = tasks[0]
+        
+        # Получаем темы для нового задания
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''SELECT t.name 
+                    FROM topics t
+                    JOIN olympiad_topics ot ON t.id = ot.topic_id
+                    JOIN olympiads o ON ot.olympiad_id = o.id
+                    JOIN years y ON o.year_id = y.id
+                    WHERE y.year = ? AND o.excercise = ?''', (year, excercise))
+        new_topics = [row[0] for row in c.fetchall()]
+        conn.close()
+        topics_str = ", ".join(new_topics) if new_topics else "Без темы"
+
+        self.user_states[user_id] = {
+            'year': year,
+            'exercises': self.get_exercises_for_year(year),  # Обновляем список заданий для этого года
+            'current_task': full_task,
+            'current_topics': new_topics,
+            'current_topic_str': topics_str
+        }
+
+        await self.show_task(update, full_task)
+        return TASK
+
     async def show_task(self, update: Update, q):
         task_text = q['task'] or ""
         await update.message.reply_text(f"❓ Задача: {task_text}")
@@ -534,19 +613,20 @@ class QuizBot:
         if not state or 'current_topics' not in state:
             return await self.start(update, context)
 
-        year = state['year']
         topics = state['current_topics']
-        exercises = self.get_exercises_by_topics_and_year(year, topics)
+        # Теперь ищем по всем годам, а не только по текущему году
+        exercises = self.get_all_exercises_by_topics(topics)
         if not exercises:
             await update.message.reply_text("Нет других заданий по этим темам.")
             return await self.show_task_from_state(update, context)
 
-        buttons = [f"{year} задание {ex['excercise']}" for ex in exercises]
+        # Формируем кнопки с указанием года
+        buttons = [f"{ex['year']} задание {ex['excercise']}" for ex in exercises]
         keyboard = chunks(buttons, 3)
         keyboard.append([BTN_BACK_TO_EXERCISES, BTN_BACK_TO_YEAR])
 
         await update.message.reply_text(
-            f"Задания по темам {', '.join(topics)} в {year} году:",
+            f"Задания по темам {', '.join(topics)} по всем годам:",
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=False)
         )
         return CHOOSE_TOPIC_EXERCISE
@@ -738,17 +818,17 @@ async def main():
         states={
             CHOOSE_YEAR: [
                 MessageHandler(filters.Text([BTN_START, BTN_BACK_TO_YEAR]), quiz_bot.choose_year),
-                MessageHandler(filters.Text(["🛡️ Админка"]), quiz_bot.admin_start),  # Новая строка
+                MessageHandler(filters.Text(["🛡️ Админка"]), quiz_bot.admin_start),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_year)
             ],
             CHOOSE_EXERCISE: [
                 MessageHandler(filters.Text([BTN_BACK_TO_YEAR]), quiz_bot.back_to_year_selection),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_exercise)
             ],
-            CHOOSE_TOPIC_EXERCISE: [
+            CHOOSE_TOPIC_EXERCISE: [  # Обновленный обработчик
                 MessageHandler(filters.Text([BTN_BACK_TO_YEAR]), quiz_bot.back_to_year_selection),
                 MessageHandler(filters.Text([BTN_BACK_TO_EXERCISES]), quiz_bot.back_to_exercises),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_exercise)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, quiz_bot.choose_topic_exercise)  # Новый обработчик
             ],
             TASK: [
                 MessageHandler(filters.Text([BTN_HINT]), quiz_bot.show_hint),
@@ -771,7 +851,7 @@ async def main():
             CommandHandler('cancel', quiz_bot.cancel),
             CommandHandler('start', quiz_bot.start),
             MessageHandler(filters.Text([BTN_START]), quiz_bot.start),
-            MessageHandler(filters.Text(["Отмена", "Cancel"]), quiz_bot.cancel),  # можно тоже константу
+            MessageHandler(filters.Text(["Отмена", "Cancel"]), quiz_bot.cancel),
         ],
         name="main_conversation",
         persistent=True
